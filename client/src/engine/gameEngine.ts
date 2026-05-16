@@ -266,12 +266,18 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
       }
 
       // Doom: destroy the single strongest non-heroic card on the entire field
+      // Exclude the doom card itself (just placed) from targeting
       if (card.def.ability === 'doom') {
-        const target = findStrongestNonHeroic(newS);
-        if (target) {
-          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
-          if (removed) {
-            newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
+        const doomInstanceId = card.instanceId;
+        let candidates = getAllNonHeroicUnits(newS).filter(u => u.unit.instanceId !== doomInstanceId);
+        if (candidates.length > 0) {
+          const maxStr = Math.max(...candidates.map(u => u.unit.currentStrength));
+          const target = candidates.find(u => u.unit.currentStrength === maxStr) || null;
+          if (target) {
+            const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
+            if (removed) {
+              newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
+            }
           }
         }
       }
@@ -434,6 +440,8 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
 
     case 'USE_LEADER': {
       if (s[who].leaderUsed) return s;
+      // Also block leader use if player has passed (shouldn't happen via UI, but guard here)
+      if (s[who].hasPassed) return s;
       let newS: GameState = { ...s, [who]: { ...s[who], leaderUsed: true }, lastAction: `${who === 'player' ? 'You' : 'AI'} used leader ability` };
       const faction = s[who].faction;
 

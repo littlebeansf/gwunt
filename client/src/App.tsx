@@ -1014,12 +1014,17 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
 
+  // isAiTurn: true when it's genuinely the AI's turn to act.
+  // This includes the case where currentTurn switched to 'player' but the player
+  // already passed — meaning the AI should keep playing (Gwint rule: if one player
+  // passed, the other keeps playing until they also pass or run out of cards).
+  const isAiTurn = state.phase === 'battle' &&
+    !state.ai.hasPassed &&
+    !(state.player.hasPassed && state.ai.hasPassed) &&
+    (state.currentTurn === 'ai' || (state.currentTurn === 'player' && state.player.hasPassed));
+
   useEffect(() => {
-    // Only fire when it's genuinely the AI's turn and AI hasn't passed
-    if (state.currentTurn !== 'ai') return;
-    if (state.ai.hasPassed) return;
-    if (state.player.hasPassed && state.ai.hasPassed) return;
-    if (state.phase !== 'battle') return;
+    if (!isAiTurn) return;
 
     let cancelled = false;
     setAiThinking(true);
@@ -1027,8 +1032,12 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
     const timer = setTimeout(() => {
       if (cancelled) return;
       const current = stateRef.current;
-      // Re-check conditions with current (non-stale) state
-      if (current.currentTurn !== 'ai' || current.ai.hasPassed || current.phase !== 'battle') {
+      // Re-check with current (non-stale) state — same isAiTurn logic
+      const stillAiTurn = current.phase === 'battle' &&
+        !current.ai.hasPassed &&
+        !(current.player.hasPassed && current.ai.hasPassed) &&
+        (current.currentTurn === 'ai' || (current.currentTurn === 'player' && current.player.hasPassed));
+      if (!stillAiTurn) {
         setAiThinking(false);
         return;
       }
@@ -1044,7 +1053,9 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
       clearTimeout(timer);
       setAiThinking(false);
     };
-  }, [state.currentTurn, state.ai.hasPassed, state.player.hasPassed, state.phase]);
+  // Dependencies: isAiTurn (for initial trigger) + currentTurn (re-fires each card play even
+  // when isAiTurn stays true, e.g. player passed so AI keeps getting the turn back)
+  }, [isAiTurn, state.currentTurn]);
 
   // Clear selected card when turn changes
   useEffect(() => { setSelectedCard(null); }, [state.currentTurn]);
@@ -1544,11 +1555,19 @@ export default function App() {
   const handleAction = useCallback((action: any, who: 'player' | 'ai') => {
     setGameState(prev => {
       if (!prev) return prev;
-      // Ignore AI actions when it's not AI's turn (prevents stale-closure double-play)
-      if (who === 'ai' && prev.currentTurn !== 'ai') return prev;
-      // Ignore AI actions when AI already passed
+      // Ignore AI actions if AI already passed
       if (who === 'ai' && prev.ai.hasPassed && action.type !== 'END_MULLIGAN') return prev;
+      // Ignore AI actions when it's not the AI's turn AND player hasn't passed yet
+      // (if player has passed, AI is allowed to act even when currentTurn === 'player')
+      if (who === 'ai' && prev.currentTurn !== 'ai' && !prev.player.hasPassed) return prev;
       let next = applyAction(prev, action, who);
+      // Auto-pass any player whose hand is empty and hasn't passed yet
+      if (!next.player.hasPassed && next.player.hand.length === 0 && next.phase === 'battle') {
+        next = applyAction(next, { type: 'PASS' }, 'player');
+      }
+      if (!next.ai.hasPassed && next.ai.hand.length === 0 && next.phase === 'battle') {
+        next = applyAction(next, { type: 'PASS' }, 'ai');
+      }
       // Trigger round end when both have passed
       if (next.player.hasPassed && next.ai.hasPassed) {
         next = checkRoundEnd(next);
