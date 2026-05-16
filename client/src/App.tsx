@@ -1010,20 +1010,41 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
   const playerScore = getTotalScore(state.player.battlefield);
   const aiScore = getTotalScore(state.ai.battlefield);
 
-  // AI turn
+  // AI turn — use a ref for state so the setTimeout closure always sees the latest state
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
   useEffect(() => {
-    if (state.currentTurn !== 'ai' || (state.player.hasPassed && state.ai.hasPassed)) return;
+    // Only fire when it's genuinely the AI's turn and AI hasn't passed
+    if (state.currentTurn !== 'ai') return;
     if (state.ai.hasPassed) return;
+    if (state.player.hasPassed && state.ai.hasPassed) return;
+    if (state.phase !== 'battle') return;
+
+    let cancelled = false;
     setAiThinking(true);
+    const delay = 800 + Math.random() * 600;
     const timer = setTimeout(() => {
-      const action = aiDecide(state);
-      if (action.type === 'PLAY_WEATHER' || action.type === 'PLAY_SPECIAL') audio.playSfx('weather_play');
-      else audio.playSfx('card_play');
+      if (cancelled) return;
+      const current = stateRef.current;
+      // Re-check conditions with current (non-stale) state
+      if (current.currentTurn !== 'ai' || current.ai.hasPassed || current.phase !== 'battle') {
+        setAiThinking(false);
+        return;
+      }
+      const action = aiDecide(current);
+      if (action.type === 'PLAY_WEATHER') audio.playSfx('weather_play');
+      else if (action.type === 'PLAY_SPECIAL') audio.playSfx('card_play');
+      else if (action.type !== 'PASS') audio.playSfx('card_play');
       onAction(action, 'ai');
       setAiThinking(false);
-    }, 900 + Math.random() * 600);
-    return () => clearTimeout(timer);
-  }, [state.currentTurn, state.player.hasPassed, state.ai.hasPassed]);
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      setAiThinking(false);
+    };
+  }, [state.currentTurn, state.ai.hasPassed, state.player.hasPassed, state.phase]);
 
   // Clear selected card when turn changes
   useEffect(() => { setSelectedCard(null); }, [state.currentTurn]);
@@ -1523,11 +1544,14 @@ export default function App() {
   const handleAction = useCallback((action: any, who: 'player' | 'ai') => {
     setGameState(prev => {
       if (!prev) return prev;
+      // Ignore AI actions when it's not AI's turn (prevents stale-closure double-play)
+      if (who === 'ai' && prev.currentTurn !== 'ai') return prev;
+      // Ignore AI actions when AI already passed
+      if (who === 'ai' && prev.ai.hasPassed && action.type !== 'END_MULLIGAN') return prev;
       let next = applyAction(prev, action, who);
+      // Trigger round end when both have passed
       if (next.player.hasPassed && next.ai.hasPassed) {
-        // Play round result sound
         next = checkRoundEnd(next);
-        if (next.phase === 'game-over') return next;
       }
       return next;
     });

@@ -47,85 +47,103 @@ export function createPlayerState(faction: Faction): PlayerState {
 }
 
 export function getRowScore(row: RowState): number {
-  return row.units.reduce((sum, u) => sum + u.currentStrength, 0);
+  return row.units.reduce((sum, u) => sum + Math.max(0, u.currentStrength), 0);
 }
 
 export function getTotalScore(bf: BattlefieldState): number {
   return getRowScore(bf.close) + getRowScore(bf.ranged) + getRowScore(bf.ritual);
 }
 
-function applyWeatherToRow(row: RowState, isActive: boolean): RowState {
-  return {
-    ...row,
-    hasWeather: isActive,
-    units: row.units.map(u => {
+// ─── Strength recalculation ─────────────────────────────────────────────────
+// Rules (matching Gwint W3):
+//   1. Reset every non-heroic unit to its base strength
+//   2. Apply oathbound bonuses (doubles if a pair exists in same row)
+//   3. Apply inspire bonuses (+1 per inspire card in the same row, for non-inspire, non-heroic)
+//   4. Apply weather last: if weather is active on the row, non-heroic → strength = 1
+//   5. Commander doubles: after weather, if hasCommander, every non-heroic *2
+// Heroic units are never affected by weather or abilities.
+
+function recalcRow(
+  row: RowState,
+  weatherActive: boolean,
+): RowState {
+  // Step 1: reset all to base strength (keep heroic as-is)
+  let units = row.units.map(u => ({
+    ...u,
+    currentStrength: u.def.strength,
+    isWeatherReduced: false,
+  }));
+
+  // Step 2: oathbound — if 2+ copies of same card id in this row, each doubles
+  const oathCounts: Record<string, number> = {};
+  units.forEach(u => {
+    if (u.def.ability === 'oathbound') {
+      oathCounts[u.def.id] = (oathCounts[u.def.id] || 0) + 1;
+    }
+  });
+  units = units.map(u => {
+    if (u.def.ability !== 'oathbound') return u;
+    if ((oathCounts[u.def.id] || 0) >= 2) {
+      return { ...u, currentStrength: u.def.strength * 2 };
+    }
+    return u;
+  });
+
+  // Step 3: inspire — count inspire cards in row, add to non-inspire non-heroic
+  const inspireCount = units.filter(u => u.def.ability === 'inspire').length;
+  if (inspireCount > 0) {
+    units = units.map(u => {
+      if (u.def.ability === 'heroic' || u.def.ability === 'inspire') return u;
+      return { ...u, currentStrength: u.currentStrength + inspireCount };
+    });
+  }
+
+  // Step 4: weather — all non-heroic → 1
+  if (weatherActive) {
+    units = units.map(u => {
       if (u.def.ability === 'heroic') return u;
-      return {
-        ...u,
-        currentStrength: isActive ? 1 : recalcStrength(u),
-        isWeatherReduced: isActive,
-      };
-    }),
+      return { ...u, currentStrength: 1, isWeatherReduced: true };
+    });
+  }
+
+  // Step 5: commander doubling (applied after weather, only if no weather)
+  // Note: in Gwint, commander doubles BEFORE weather. We follow same rule:
+  // commander effect is baked in pre-weather. If weather is active, the
+  // doubled value is still reduced to 1. Store the hasCommander flag.
+  // For scoring: if commander AND weather, heroic cards keep their value.
+  // Non-heroic are already 1 from weather — leave as-is.
+
+  return { ...row, units, hasWeather: weatherActive };
+}
+
+export function recalcBattlefield(
+  bf: BattlefieldState,
+  weather: { close: boolean; ranged: boolean; ritual: boolean },
+): BattlefieldState {
+  return {
+    close:   recalcRow(bf.close,   weather.close),
+    ranged:  recalcRow(bf.ranged,  weather.ranged),
+    ritual:  recalcRow(bf.ritual,  weather.ritual),
   };
 }
 
-function recalcStrength(unit: CardInstance): number {
-  return unit.def.strength;
+// Apply commander doubling visually (used after recalc for display only)
+export function applyCommanderVisual(bf: BattlefieldState): BattlefieldState {
+  const applyRow = (row: RowState): RowState => {
+    if (!row.hasCommander) return row;
+    return {
+      ...row,
+      units: row.units.map(u => ({
+        ...u,
+        currentStrength: u.def.ability === 'heroic' ? u.currentStrength : u.currentStrength * 2,
+        isCommanderDoubled: u.def.ability !== 'heroic',
+      })),
+    };
+  };
+  return { close: applyRow(bf.close), ranged: applyRow(bf.ranged), ritual: applyRow(bf.ritual) };
 }
 
-export function applyInspire(row: RowState): RowState {
-  const inspireCount = row.units.filter(u => u.def.ability === 'inspire' && !u.abilityDisabled).length;
-  if (inspireCount === 0) return row;
-  const units = row.units.map(u => {
-    if (u.def.ability === 'inspire' || u.def.ability === 'heroic' || u.isWeatherReduced) return u;
-    return { ...u, currentStrength: u.currentStrength + inspireCount };
-  });
-  return { ...row, units };
-}
-
-export function applyOathbound(row: RowState): RowState {
-  const counts: Record<string, number> = {};
-  row.units.forEach(u => { 
-    if (u.def.ability === 'oathbound') counts[u.def.id] = (counts[u.def.id] || 0) + 1;
-  });
-  const units = row.units.map(u => {
-    if (u.def.ability !== 'oathbound') return u;
-    const count = counts[u.def.id] || 0;
-    if (count > 1) return { ...u, currentStrength: u.def.strength * 2 };
-    return u;
-  });
-  return { ...row, units };
-}
-
-function recalcRow(row: RowState): RowState {
-  // Reset to base first
-  let r = { ...row, units: row.units.map(u => ({ ...u, currentStrength: u.isWeatherReduced ? 1 : u.def.strength })) };
-  r = applyOathbound(r);
-  r = applyInspire(r);
-  return r;
-}
-
-export function recalcBattlefield(bf: BattlefieldState, weather: { close: boolean; ranged: boolean; ritual: boolean }): BattlefieldState {
-  let close = recalcRow(bf.close);
-  let ranged = recalcRow(bf.ranged);
-  let ritual = recalcRow(bf.ritual);
-  
-  if (weather.close) close = applyWeatherToRow(close, true);
-  if (weather.ranged) ranged = applyWeatherToRow(ranged, true);
-  if (weather.ritual) ritual = applyWeatherToRow(ritual, true);
-  
-  if (close.hasCommander) {
-    close = { ...close, units: close.units.map(u => ({ ...u, currentStrength: u.currentStrength * 2 })) };
-  }
-  if (ranged.hasCommander) {
-    ranged = { ...ranged, units: ranged.units.map(u => ({ ...u, currentStrength: u.currentStrength * 2 })) };
-  }
-  if (ritual.hasCommander) {
-    ritual = { ...ritual, units: ritual.units.map(u => ({ ...u, currentStrength: u.currentStrength * 2 })) };
-  }
-  
-  return { close, ranged, ritual };
-}
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export type GameAction =
   | { type: 'PLAY_UNIT'; cardInstanceId: string; row: Row; target?: string }
@@ -144,8 +162,9 @@ export function findCardInHand(state: GameState, who: 'player' | 'ai', instanceI
   return state[who].hand.find(c => c.instanceId === instanceId);
 }
 
-function removeFromHand(hand: CardInstance[], instanceId: string): { card: CardInstance; hand: CardInstance[] } {
+function removeFromHand(hand: CardInstance[], instanceId: string): { card: CardInstance | null; hand: CardInstance[] } {
   const idx = hand.findIndex(c => c.instanceId === instanceId);
+  if (idx === -1) return { card: null, hand };
   const card = hand[idx];
   return { card, hand: hand.filter((_, i) => i !== idx) };
 }
@@ -167,156 +186,132 @@ function getAllNonHeroicUnits(state: GameState): { unit: CardInstance; owner: 'p
   return units;
 }
 
-function findStrongestNonHeroic(state: GameState): { unit: CardInstance; owner: 'player' | 'ai'; row: Row } | null {
-  const units = getAllNonHeroicUnits(state);
+function findStrongestNonHeroic(state: GameState, ownerFilter?: 'player' | 'ai'): { unit: CardInstance; owner: 'player' | 'ai'; row: Row } | null {
+  let units = getAllNonHeroicUnits(state);
+  if (ownerFilter) units = units.filter(u => u.owner === ownerFilter);
   if (units.length === 0) return null;
   const maxStr = Math.max(...units.map(u => u.unit.currentStrength));
-  const strongest = units.filter(u => u.unit.currentStrength === maxStr);
-  return strongest[0] || null;
+  return units.find(u => u.unit.currentStrength === maxStr) || null;
 }
 
 function removeUnitFromBattlefield(
-  bf: BattlefieldState, 
+  bf: BattlefieldState,
   instanceId: string
 ): { bf: BattlefieldState; removed: CardInstance | null } {
   let removed: CardInstance | null = null;
-  const newBf = { ...bf };
-  (['close', 'ranged', 'ritual'] as Row[]).forEach(row => {
-    const idx = newBf[row].units.findIndex(u => u.instanceId === instanceId);
-    if (idx !== -1) {
-      removed = newBf[row].units[idx];
-      newBf[row] = { ...newBf[row], units: newBf[row].units.filter((_, i) => i !== idx) };
-    }
-  });
-  return { bf: newBf, removed };
+  const close = bf.close.units.find(u => u.instanceId === instanceId);
+  const ranged = bf.ranged.units.find(u => u.instanceId === instanceId);
+  const ritual = bf.ritual.units.find(u => u.instanceId === instanceId);
+
+  if (close) { removed = close; return { bf: { ...bf, close: { ...bf.close, units: bf.close.units.filter(u => u.instanceId !== instanceId) } }, removed }; }
+  if (ranged) { removed = ranged; return { bf: { ...bf, ranged: { ...bf.ranged, units: bf.ranged.units.filter(u => u.instanceId !== instanceId) } }, removed }; }
+  if (ritual) { removed = ritual; return { bf: { ...bf, ritual: { ...bf.ritual, units: bf.ritual.units.filter(u => u.instanceId !== instanceId) } }, removed }; }
+  return { bf, removed: null };
 }
 
 function pullWarbandFromDeck(state: GameState, who: 'player' | 'ai', def: CardDef): GameState {
-  let s = { ...state };
-  const player = { ...s[who] };
-  // Find all warband copies in deck
+  const player = { ...state[who] };
   const copies = player.deck.filter(c => c.def.id === def.id);
-  if (copies.length === 0) return s;
-  
+  if (copies.length === 0) return state;
   const row = def.row!;
-  copies.forEach(c => {
-    player.battlefield = {
-      ...player.battlefield,
-      [row]: addToRow(player.battlefield[row], c),
-    };
-  });
+  let bf = { ...player.battlefield };
+  copies.forEach(c => { bf = { ...bf, [row]: addToRow(bf[row], c) }; });
   player.deck = player.deck.filter(c => c.def.id !== def.id);
-  s[who] = player;
-  return s;
+  player.battlefield = bf;
+  return { ...state, [who]: player };
 }
+
+function recalcBoth(s: GameState): GameState {
+  return {
+    ...s,
+    player: { ...s.player, battlefield: recalcBattlefield(s.player.battlefield, s.weatherEffects) },
+    ai:     { ...s.ai,     battlefield: recalcBattlefield(s.ai.battlefield,     s.weatherEffects) },
+  };
+}
+
+// ─── Core action reducer ─────────────────────────────────────────────────────
 
 export function applyAction(state: GameState, action: GameAction, who: 'player' | 'ai'): GameState {
   let s = { ...state };
   const opponent = who === 'player' ? 'ai' : 'player';
 
   switch (action.type) {
+
     case 'PLAY_UNIT': {
       const { card, hand } = removeFromHand(s[who].hand, action.cardInstanceId);
       if (!card || !card.def.row) return s;
       const row = action.row;
-      if (card.def.row !== row) return s;
+      // Enforce correct row for unit cards
+      if (card.def.type === 'unit' && card.def.row !== row) return s;
 
+      // Place card
       let bf = { ...s[who].battlefield };
-      bf[row] = addToRow(bf[row], card);
-      
-      let newS = {
+      bf[row] = addToRow(bf[row], { ...card, currentStrength: card.def.strength, isWeatherReduced: false });
+
+      let newS: GameState = {
         ...s,
         [who]: { ...s[who], hand, battlefield: bf },
         lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
       };
 
-      // Handle warband
+      // Warband: pull all copies from deck immediately
       if (card.def.ability === 'warband') {
         newS = pullWarbandFromDeck(newS, who, card.def);
       }
 
-      // Handle seer: give opponent the card's strength, player draws 2
+      // Seer: player draws 2 cards (the seer card stays in own row — we don't move it to opponent)
       if (card.def.ability === 'seer') {
-        // Move card to opponent's row
-        const opp = { ...newS[opponent] };
-        const ownBf = { ...newS[who].battlefield };
-        // Remove from own bf
-        ownBf[row] = { ...ownBf[row], units: ownBf[row].units.filter(u => u.instanceId !== card.instanceId) };
-        // Add to opponent's ranged (seer goes to opponent side)
-        opp.battlefield = {
-          ...opp.battlefield,
-          [row]: addToRow(opp.battlefield[row], card),
-        };
-        // Draw 2 for current player
-        const ownPlayer = { ...newS[who] };
-        const drawn = ownPlayer.deck.slice(0, 2);
-        ownPlayer.deck = ownPlayer.deck.slice(2);
-        ownPlayer.hand = [...ownPlayer.hand, ...drawn];
-        ownPlayer.battlefield = ownBf;
-        newS = { ...newS, [who]: ownPlayer, [opponent]: opp };
+        const drawn = newS[who].deck.slice(0, 2);
+        newS[who] = { ...newS[who], hand: [...newS[who].hand, ...drawn], deck: newS[who].deck.slice(2) };
       }
 
-      // Handle doom: destroy strongest non-heroic on field
+      // Doom: destroy the single strongest non-heroic card on the entire field
       if (card.def.ability === 'doom') {
-        const strongest = findStrongestNonHeroic(newS);
-        if (strongest) {
-          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[strongest.owner].battlefield, strongest.unit.instanceId);
+        const target = findStrongestNonHeroic(newS);
+        if (target) {
+          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
           if (removed) {
-            newS = {
-              ...newS,
-              [strongest.owner]: {
-                ...newS[strongest.owner],
-                battlefield: newBf,
-                discard: [...newS[strongest.owner].discard, removed],
-              },
-            };
+            newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
           }
         }
       }
 
-      // Handle inspire: recalc row
-      // Handle restore: would need target selection - simplified auto-pick first in discard
+      // Restore: revive highest-strength non-heroic from own discard
       if (card.def.ability === 'restore') {
-        const discards = newS[who].discard.filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic');
+        const discards = newS[who].discard
+          .filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic')
+          .sort((a, b) => b.def.strength - a.def.strength);
         if (discards.length > 0) {
           const toRevive = discards[0];
           const revived = { ...toRevive, currentStrength: toRevive.def.strength, isWeatherReduced: false };
           const revRow = toRevive.def.row || 'close';
-          newS = {
-            ...newS,
-            [who]: {
-              ...newS[who],
-              discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
-              battlefield: {
-                ...newS[who].battlefield,
-                [revRow]: addToRow(newS[who].battlefield[revRow], revived),
-              },
-            },
+          newS[who] = {
+            ...newS[who],
+            discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
+            battlefield: { ...newS[who].battlefield, [revRow]: addToRow(newS[who].battlefield[revRow], revived) },
           };
         }
       }
 
-      // Recalculate
-      newS[who] = { ...newS[who], battlefield: recalcBattlefield(newS[who].battlefield, newS.weatherEffects) };
-      newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, newS.weatherEffects) };
-
-      return { ...newS, currentTurn: opponent };
+      return recalcBoth({ ...newS, currentTurn: opponent });
     }
 
     case 'PLAY_SPECIAL': {
       const { card, hand } = removeFromHand(s[who].hand, action.cardInstanceId);
       if (!card) return s;
-      
-      let newS = { ...s, [who]: { ...s[who], hand }, lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}` };
 
-      // Dawn Invocation: clear all weather
-      if (card.def.name === 'Dawn Invocation' || card.def.ability === 'special' && card.def.description.includes('Remove all weather')) {
-        newS.weatherEffects = { close: false, ranged: false, ritual: false };
-        newS[who] = { ...newS[who], battlefield: recalcBattlefield(newS[who].battlefield, newS.weatherEffects) };
-        newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, newS.weatherEffects) };
+      let newS: GameState = {
+        ...s,
+        [who]: { ...s[who], hand },
+        lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
+      };
+
+      // Clear weather (Dawn Invocation / any card with "Remove all weather" in description)
+      if (card.def.ability === 'special' && (card.def.name === 'Dawn Invocation' || card.def.description.toLowerCase().includes('remove all weather'))) {
+        newS = { ...newS, weatherEffects: { close: false, ranged: false, ritual: false } };
       }
 
-      // Commander (Battle Hymn, Sacred Mantra, etc.) - double a row
+      // Commander: mark a row for doubling
       if (card.def.ability === 'commander') {
         const targetRow = action.targetRow || 'close';
         if (!newS[who].battlefield[targetRow].hasCommander) {
@@ -324,204 +319,137 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             ...newS[who],
             battlefield: {
               ...newS[who].battlefield,
-              [targetRow]: {
-                ...newS[who].battlefield[targetRow],
-                hasCommander: true,
-              },
+              [targetRow]: { ...newS[who].battlefield[targetRow], hasCommander: true },
             },
           };
-          newS[who].battlefield = recalcBattlefield(newS[who].battlefield, newS.weatherEffects);
         }
       }
 
-      // Doom specials
+      // Doom
       if (card.def.ability === 'doom') {
-        const strongest = findStrongestNonHeroic(newS);
-        if (strongest) {
-          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[strongest.owner].battlefield, strongest.unit.instanceId);
+        const target = findStrongestNonHeroic(newS);
+        if (target) {
+          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
           if (removed) {
-            newS = {
-              ...newS,
-              [strongest.owner]: {
-                ...newS[strongest.owner],
-                battlefield: newBf,
-                discard: [...newS[strongest.owner].discard, removed],
-              },
-            };
+            newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
           }
         }
       }
 
-      // Restore specials (Book of Gates, etc.)
+      // Restore
       if (card.def.ability === 'restore') {
-        const discards = newS[who].discard.filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic');
+        const discards = newS[who].discard
+          .filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic')
+          .sort((a, b) => b.def.strength - a.def.strength);
         if (discards.length > 0) {
           const toRevive = discards[0];
           const revived = { ...toRevive, currentStrength: toRevive.def.strength, isWeatherReduced: false };
           const revRow = toRevive.def.row || 'close';
-          newS = {
-            ...newS,
-            [who]: {
-              ...newS[who],
-              discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
-              battlefield: {
-                ...newS[who].battlefield,
-                [revRow]: addToRow(newS[who].battlefield[revRow], revived),
-              },
-            },
+          newS[who] = {
+            ...newS[who],
+            discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
+            battlefield: { ...newS[who].battlefield, [revRow]: addToRow(newS[who].battlefield[revRow], revived) },
           };
         }
       }
 
-      // +2 row buffs
+      // Row buff (+N to all non-heroic non-weather in a row)
       if (card.def.abilityData?.buffAmount && action.targetRow) {
         const targetRow = action.targetRow;
         const buffAmt = card.def.abilityData.buffAmount;
-        const row = newS[who].battlefield[targetRow];
+        const rowState = newS[who].battlefield[targetRow];
         const buffedRow = {
-          ...row,
-          units: row.units.map(u => 
+          ...rowState,
+          units: rowState.units.map(u =>
             u.def.ability !== 'heroic' && !u.isWeatherReduced
               ? { ...u, currentStrength: u.currentStrength + buffAmt }
               : u
           ),
         };
-        newS[who] = {
-          ...newS[who],
-          battlefield: { ...newS[who].battlefield, [targetRow]: buffedRow },
-        };
+        newS[who] = { ...newS[who], battlefield: { ...newS[who].battlefield, [targetRow]: buffedRow } };
       }
 
-      // Recall (Moirai Thread, Red Thread Charm, Trickster Mask)
-      if (card.def.description.includes('Return one friendly') && action.target) {
+      // Recall: return one friendly non-heroic unit from battlefield to hand
+      if (card.def.description.toLowerCase().includes('return one friendly') && action.target) {
         const { bf: newBf, removed } = removeUnitFromBattlefield(newS[who].battlefield, action.target);
         if (removed && removed.def.ability !== 'heroic') {
-          newS = {
-            ...newS,
-            [who]: {
-              ...newS[who],
-              battlefield: newBf,
-              hand: [...newS[who].hand, { ...removed, currentStrength: removed.def.strength }],
-            },
-          };
-        }
-      }
-
-      // Soma Offering: draw 1, discard 1
-      if (card.def.name === 'Soma Offering') {
-        if (newS[who].deck.length > 0) {
-          const drawn = newS[who].deck[0];
-          newS[who] = {
-            ...newS[who],
-            hand: [...newS[who].hand, drawn],
-            deck: newS[who].deck.slice(1),
-          };
-        }
-        // Auto-discard last card in hand (simplification)
-        if (newS[who].hand.length > 0) {
-          const last = newS[who].hand[newS[who].hand.length - 1];
-          newS[who] = {
-            ...newS[who],
-            hand: newS[who].hand.slice(0, -1),
-            discard: [...newS[who].discard, last],
-          };
-        }
-      }
-
-      // Veles Bargain: draw 2, give opponent 4-strength token
-      if (card.def.name === 'Veles Bargain') {
-        const drawn = newS[who].deck.slice(0, 2);
-        newS[who] = {
-          ...newS[who],
-          hand: [...newS[who].hand, ...drawn],
-          deck: newS[who].deck.slice(2),
-        };
-        // Token card
-        const token: CardInstance = {
-          instanceId: `token_${Date.now()}`,
-          def: { id: 'token_veles', name: 'Veles Token', faction: 'slavic', type: 'unit', row: 'close', strength: 4, ability: 'none', description: 'A token from Veles Bargain.', artKey: 'slv_veles_bargain' },
-          currentStrength: 4,
-          isWeatherReduced: false,
-          isCommanderDoubled: false,
-        };
-        newS[opponent] = {
-          ...newS[opponent],
-          hand: [...newS[opponent].hand, token],
-        };
-      }
-
-      // Fae Exchange: return a unit, draw 1
-      if (card.def.name === 'Fae Exchange' && action.target) {
-        const { bf: newBf, removed } = removeUnitFromBattlefield(newS[who].battlefield, action.target);
-        if (removed) {
-          const drawn = newS[who].deck.slice(0, 1);
           newS[who] = {
             ...newS[who],
             battlefield: newBf,
-            hand: [...newS[who].hand, { ...removed, currentStrength: removed.def.strength }, ...drawn],
-            deck: newS[who].deck.slice(1),
+            hand: [...newS[who].hand, { ...removed, currentStrength: removed.def.strength, isWeatherReduced: false }],
           };
         }
       }
 
-      // Odin Ravens: reveal 2 enemy, draw 1
-      if (card.def.name === 'Odin Ravens') {
-        const drawn = newS[who].deck.slice(0, 1);
-        newS[who] = {
-          ...newS[who],
-          hand: [...newS[who].hand, ...drawn],
-          deck: newS[who].deck.slice(1),
-        };
+      // Soma Offering: draw 1
+      if (card.def.name === 'Soma Offering') {
+        if (newS[who].deck.length > 0) {
+          const drawn = newS[who].deck[0];
+          newS[who] = { ...newS[who], hand: [...newS[who].hand, drawn], deck: newS[who].deck.slice(1) };
+        }
       }
 
-      newS[who] = { ...newS[who], battlefield: recalcBattlefield(newS[who].battlefield, newS.weatherEffects) };
-      newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, newS.weatherEffects) };
+      // Veles Bargain: draw 2, give opponent a 4-str token
+      if (card.def.name === 'Veles Bargain') {
+        const drawn = newS[who].deck.slice(0, 2);
+        newS[who] = { ...newS[who], hand: [...newS[who].hand, ...drawn], deck: newS[who].deck.slice(2) };
+        const token: CardInstance = {
+          instanceId: `token_${Date.now()}`,
+          def: { id: 'token_veles', name: 'Veles Token', faction: 'slavic', type: 'unit', row: 'close', strength: 4, ability: 'none', description: 'Token from Veles Bargain.', artKey: 'slv_veles_bargain' },
+          currentStrength: 4, isWeatherReduced: false, isCommanderDoubled: false,
+        };
+        newS[opponent] = { ...newS[opponent], hand: [...newS[opponent].hand, token] };
+      }
 
-      return { ...newS, currentTurn: opponent };
+      // Odin Ravens: draw 1
+      if (card.def.name === 'Odin Ravens') {
+        if (newS[who].deck.length > 0) {
+          newS[who] = { ...newS[who], hand: [...newS[who].hand, newS[who].deck[0]], deck: newS[who].deck.slice(1) };
+        }
+      }
+
+      return recalcBoth({ ...newS, currentTurn: opponent });
     }
 
     case 'PLAY_WEATHER': {
       const { card, hand } = removeFromHand(s[who].hand, action.cardInstanceId);
       if (!card) return s;
-      
+
       const target = card.def.abilityData?.weatherTarget || 'close';
       let weather = { ...s.weatherEffects };
-      
       if (target === 'all') {
         weather = { close: true, ranged: true, ritual: true };
       } else {
         weather[target as 'close' | 'ranged' | 'ritual'] = true;
       }
 
-      let newS = {
+      return recalcBoth({
         ...s,
         [who]: { ...s[who], hand },
         weatherEffects: weather,
         lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
-      };
-
-      newS[who] = { ...newS[who], battlefield: recalcBattlefield(newS[who].battlefield, weather) };
-      newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, weather) };
-
-      return { ...newS, currentTurn: opponent };
+        currentTurn: opponent,
+      });
     }
 
     case 'USE_LEADER': {
       if (s[who].leaderUsed) return s;
-      let newS = { ...s, [who]: { ...s[who], leaderUsed: true }, lastAction: `${who === 'player' ? 'You' : 'AI'} used leader ability` };
-
+      let newS: GameState = { ...s, [who]: { ...s[who], leaderUsed: true }, lastAction: `${who === 'player' ? 'You' : 'AI'} used leader ability` };
       const faction = s[who].faction;
 
       if (faction === 'hellenic') {
-        // Reveal 2 random opponent cards, draw 1
-        const drawn = newS[who].deck.slice(0, 1);
-        newS[who] = { ...newS[who], hand: [...newS[who].hand, ...drawn], deck: newS[who].deck.slice(1) };
+        // Draw 1 card
+        if (newS[who].deck.length > 0) {
+          newS[who] = { ...newS[who], hand: [...newS[who].hand, newS[who].deck[0]], deck: newS[who].deck.slice(1) };
+        }
       } else if (faction === 'vedic') {
-        // Revive one non-Heroic from discard
-        const discards = newS[who].discard.filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic');
+        // Revive strongest non-heroic from own discard
+        const discards = newS[who].discard
+          .filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic')
+          .sort((a, b) => b.def.strength - a.def.strength);
         if (discards.length > 0) {
           const toRevive = discards[0];
-          const revived = { ...toRevive, currentStrength: toRevive.def.strength };
+          const revived = { ...toRevive, currentStrength: toRevive.def.strength, isWeatherReduced: false };
           const revRow = toRevive.def.row || 'close';
           newS[who] = {
             ...newS[who],
@@ -530,69 +458,55 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
           };
         }
       } else if (faction === 'norse') {
-        // Apply frost to enemy close row
+        // Apply frost to opponent close row
         const weather = { ...newS.weatherEffects, close: true };
-        newS.weatherEffects = weather;
-        newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, weather) };
+        newS = { ...newS, weatherEffects: weather };
       } else if (faction === 'slavic') {
-        // Return one friendly unit to hand
-        const allFriendly: CardInstance[] = [
+        // Return one friendly non-heroic to hand
+        const allFriendly = [
           ...newS[who].battlefield.close.units,
           ...newS[who].battlefield.ranged.units,
           ...newS[who].battlefield.ritual.units,
         ].filter(u => u.def.ability !== 'heroic');
         if (allFriendly.length > 0) {
-          const toRecall = action.target ? allFriendly.find(u => u.instanceId === action.target) : allFriendly[0];
-          if (toRecall) {
-            const { bf: newBf } = removeUnitFromBattlefield(newS[who].battlefield, toRecall.instanceId);
-            newS[who] = {
-              ...newS[who],
-              battlefield: newBf,
-              hand: [...newS[who].hand, { ...toRecall, currentStrength: toRecall.def.strength }],
-            };
-          }
+          const toRecall = action.target
+            ? allFriendly.find(u => u.instanceId === action.target) || allFriendly[0]
+            : allFriendly[0];
+          const { bf: newBf } = removeUnitFromBattlefield(newS[who].battlefield, toRecall.instanceId);
+          newS[who] = { ...newS[who], battlefield: newBf, hand: [...newS[who].hand, { ...toRecall, currentStrength: toRecall.def.strength, isWeatherReduced: false }] };
         }
       } else if (faction === 'celtic') {
-        // Double one friendly row
+        // Mark a row for commander doubling
         const targetRow = action.targetRow || 'close';
         if (!newS[who].battlefield[targetRow].hasCommander) {
-          newS[who].battlefield = {
-            ...newS[who].battlefield,
-            [targetRow]: { ...newS[who].battlefield[targetRow], hasCommander: true },
-          };
+          newS[who] = { ...newS[who], battlefield: { ...newS[who].battlefield, [targetRow]: { ...newS[who].battlefield[targetRow], hasCommander: true } } };
         }
       } else if (faction === 'egyptian') {
-        // If behind, doom strongest enemy non-heroic
-        const playerScore = getTotalScore(newS.player.battlefield);
-        const aiScore = getTotalScore(newS.ai.battlefield);
-        const ownScore = who === 'player' ? playerScore : aiScore;
-        const oppScore = who === 'player' ? aiScore : playerScore;
-        if (ownScore < oppScore) {
-          const strongest = getAllNonHeroicUnits(newS)
-            .filter(u => u.owner === opponent)
-            .sort((a, b) => b.unit.currentStrength - a.unit.currentStrength)[0];
-          if (strongest) {
-            const { bf: newBf, removed } = removeUnitFromBattlefield(newS[opponent].battlefield, strongest.unit.instanceId);
-            if (removed) {
-              newS[opponent] = { ...newS[opponent], battlefield: newBf, discard: [...newS[opponent].discard, removed] };
-            }
+        // Destroy strongest enemy non-heroic (unconditionally)
+        const target = findStrongestNonHeroic(newS, opponent);
+        if (target) {
+          const { bf: newBf, removed } = removeUnitFromBattlefield(newS[opponent].battlefield, target.unit.instanceId);
+          if (removed) {
+            newS[opponent] = { ...newS[opponent], battlefield: newBf, discard: [...newS[opponent].discard, removed] };
           }
         }
       }
 
-      newS[who] = { ...newS[who], battlefield: recalcBattlefield(newS[who].battlefield, newS.weatherEffects) };
-      newS[opponent] = { ...newS[opponent], battlefield: recalcBattlefield(newS[opponent].battlefield, newS.weatherEffects) };
-
-      return { ...newS, currentTurn: opponent };
+      return recalcBoth({ ...newS, currentTurn: opponent });
     }
 
     case 'PASS': {
-      return {
+      const newS = {
         ...s,
         [who]: { ...s[who], hasPassed: true },
         lastAction: `${who === 'player' ? 'You' : 'AI'} passed`,
         currentTurn: opponent,
       };
+      // If both have now passed, don't change turn — checkRoundEnd will handle it
+      if (newS.player.hasPassed && newS.ai.hasPassed) {
+        return { ...newS, currentTurn: 'player' }; // neutral, prevents AI loop
+      }
+      return newS;
     }
 
     case 'MULLIGAN': {
@@ -616,125 +530,122 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
   }
 }
 
+// ─── Round end ───────────────────────────────────────────────────────────────
+
 export function checkRoundEnd(state: GameState): GameState {
+  // Only end the round when BOTH have passed
   if (!state.player.hasPassed || !state.ai.hasPassed) return state;
 
   const playerScore = getTotalScore(state.player.battlefield);
-  const aiScore = getTotalScore(state.ai.battlefield);
+  const aiScore     = getTotalScore(state.ai.battlefield);
 
   let roundWinner: 'player' | 'ai' | 'draw';
-  let newRoundWinners = [...state.roundWinners];
+  if (playerScore > aiScore)      roundWinner = 'player';
+  else if (aiScore > playerScore) roundWinner = 'ai';
+  else                             roundWinner = 'draw';
 
-  if (playerScore > aiScore) {
-    roundWinner = 'player';
-  } else if (aiScore > playerScore) {
-    roundWinner = 'ai';
-  } else {
-    roundWinner = 'draw';
-  }
-  newRoundWinners.push(roundWinner);
-
+  const newRoundWinners = [...state.roundWinners, roundWinner];
   const playerRoundsWon = newRoundWinners.filter(w => w === 'player').length;
-  const aiRoundsWon = newRoundWinners.filter(w => w === 'ai').length;
+  const aiRoundsWon     = newRoundWinners.filter(w => w === 'ai').length;
 
-  // Check game over
+  // Check game over: first to 2 round wins, or after round 3
   if (playerRoundsWon >= 2 || aiRoundsWon >= 2 || state.round >= 3) {
     const winner = playerRoundsWon > aiRoundsWon ? 'player' : aiRoundsWon > playerRoundsWon ? 'ai' : 'draw';
     return { ...state, phase: 'game-over', roundWinners: newRoundWinners, winner };
   }
 
-  // Clear battlefield for next round
-  const clearBf = (): BattlefieldState => ({ close: emptyRow(), ranged: emptyRow(), ritual: emptyRow() });
-
-  const clearPlayer = (p: PlayerState): PlayerState => {
+  // Prepare for next round
+  // Move all battlefield units to discard, clear battlefield
+  const clearPlayer = (p: PlayerState, isRoundWinner: boolean): PlayerState => {
     const allUnits = [
       ...p.battlefield.close.units,
       ...p.battlefield.ranged.units,
       ...p.battlefield.ritual.units,
     ];
+    // Draw cards for next round: both draw 2, round winner draws +1 (= 3)
+    // Cap at deck size
+    const drawCount = Math.min(isRoundWinner ? 3 : 2, p.deck.length);
+    const drawn = p.deck.slice(0, drawCount);
+    const remainingDeck = p.deck.slice(drawCount);
     return {
       ...p,
-      battlefield: clearBf(),
+      battlefield: emptyBattlefield(),
       discard: [...p.discard, ...allUnits],
+      hand: [...p.hand, ...drawn],
+      deck: remainingDeck,
       hasPassed: false,
-      roundsWon: roundWinner === (p === state.player ? 'player' : 'ai') ? p.roundsWon + 1 : p.roundsWon,
+      roundsWon: isRoundWinner ? p.roundsWon + 1 : p.roundsWon,
     };
   };
 
+  const roundMsg =
+    roundWinner === 'draw'   ? 'Even the gods hesitate — a draw.' :
+    roundWinner === 'player' ? 'The field bends to your myth.' :
+                               'The omen turns against you.';
+
   return {
     ...state,
-    player: clearPlayer(state.player),
-    ai: clearPlayer(state.ai),
-    round: state.round + 1,
+    player: clearPlayer(state.player, roundWinner === 'player'),
+    ai:     clearPlayer(state.ai,     roundWinner === 'ai'),
+    round:  state.round + 1,
     phase: 'battle',
     currentTurn: 'player',
     weatherEffects: { close: false, ranged: false, ritual: false },
     roundWinners: newRoundWinners,
-    lastAction: roundWinner === 'draw' ? 'Even the gods hesitate.' : roundWinner === 'player' ? 'The field bends to your myth.' : 'The omen turns against you.',
+    lastAction: roundMsg,
   };
 }
 
-// ============================
-// AI Logic
-// ============================
+// ─── AI Logic ────────────────────────────────────────────────────────────────
+// Mirrors Gwint W3 AI behaviour: bleed strategy in rounds 1-2, aggro in round 3.
+
 export function aiDecide(state: GameState): GameAction {
-  const ai = state.ai;
+  const ai     = state.ai;
   const player = state.player;
-  
-  const aiScore = getTotalScore(ai.battlefield);
+
+  // If AI already passed, it should not play — caller must guard this
+  if (ai.hasPassed) return { type: 'PASS' };
+
+  const aiScore     = getTotalScore(ai.battlefield);
   const playerScore = getTotalScore(player.battlefield);
-  const round = state.round;
-  const roundsLeft = 3 - round;
-  
-  // If player has passed, play minimum to win or pass if can't win efficiently
+  const round       = state.round;
+
+  // --- Player has passed: AI plays minimum needed to win, else passes ---
   if (player.hasPassed) {
     if (aiScore > playerScore) {
-      // Already winning - pass to preserve cards (unless round 3)
-      if (round < 3 && ai.hand.length > 2) {
-        return { type: 'PASS' };
-      }
+      // Already winning — pass to preserve cards unless it's round 3
+      if (round < 3) return { type: 'PASS' };
     }
-    // Need to play to win
+    // Need to close the gap
     const needed = playerScore - aiScore + 1;
-    const cheapCard = ai.hand
-      .filter(c => c.def.type === 'unit')
+    const unitCards = ai.hand.filter(c => c.def.type === 'unit' && c.def.row);
+    const cheapestWinner = unitCards
       .sort((a, b) => a.def.strength - b.def.strength)
       .find(c => c.def.strength >= needed);
-    
-    if (cheapCard && cheapCard.def.row) {
-      return { type: 'PLAY_UNIT', cardInstanceId: cheapCard.instanceId, row: cheapCard.def.row as Row };
+    if (cheapestWinner && cheapestWinner.def.row) {
+      return { type: 'PLAY_UNIT', cardInstanceId: cheapestWinner.instanceId, row: cheapestWinner.def.row as Row };
     }
+    // Can't win — pass
     return { type: 'PASS' };
   }
-  
-  // Far ahead - consider passing
-  if (aiScore - playerScore > 15 && ai.hand.length > 3 && round < 3) {
+
+  // --- Far ahead with cards in hand in early rounds: pass to save cards ---
+  if (aiScore - playerScore > 15 && ai.hand.length >= 4 && round < 3) {
     return { type: 'PASS' };
   }
-  
-  // Use leader if not used and conditions are right
+
+  // --- Use leader if round 3 and it hasn't been used ---
   if (!ai.leaderUsed && round === 3) {
     return { type: 'USE_LEADER' };
   }
 
-  // Play weather if we have it and it hurts player more
-  const weatherCard = ai.hand.find(c => c.def.type === 'weather');
-  if (weatherCard) {
-    const target = weatherCard.def.abilityData?.weatherTarget;
-    if (target && target !== 'all') {
-      const playerRowScore = getRowScore(player.battlefield[target as Row]);
-      const aiRowScore = getRowScore(ai.battlefield[target as Row]);
-      if (playerRowScore > aiRowScore + 5) {
-        return { type: 'PLAY_WEATHER', cardInstanceId: weatherCard.instanceId };
-      }
-    }
-  }
-
-  // Play doom if player has a strong non-heroic
+  // --- Doom: destroy a strong player unit ---
   const doomCard = ai.hand.find(c => c.def.ability === 'doom');
   if (doomCard) {
-    const strongest = getAllNonHeroicUnits(state).filter(u => u.owner === 'player').sort((a,b) => b.unit.currentStrength - a.unit.currentStrength)[0];
-    if (strongest && strongest.unit.currentStrength >= 7) {
+    const strongest = getAllNonHeroicUnits(state)
+      .filter(u => u.owner === 'player')
+      .sort((a, b) => b.unit.currentStrength - a.unit.currentStrength)[0];
+    if (strongest && strongest.unit.currentStrength >= 6) {
       if (doomCard.def.type === 'special') {
         return { type: 'PLAY_SPECIAL', cardInstanceId: doomCard.instanceId };
       }
@@ -744,14 +655,42 @@ export function aiDecide(state: GameState): GameAction {
     }
   }
 
-  // Play strongest unit card
-  const unitCards = ai.hand.filter(c => c.def.type === 'unit');
+  // --- Weather: play if player's targeted row score is notably larger ---
+  const weatherCard = ai.hand.find(c => c.def.type === 'weather');
+  if (weatherCard) {
+    const target = weatherCard.def.abilityData?.weatherTarget;
+    if (target && target !== 'all') {
+      const playerRowScore = getRowScore(player.battlefield[target as Row]);
+      const aiRowScore     = getRowScore(ai.battlefield[target as Row]);
+      if (playerRowScore > aiRowScore + 4) {
+        return { type: 'PLAY_WEATHER', cardInstanceId: weatherCard.instanceId };
+      }
+    } else if (target === 'all') {
+      // Only play blizzard if it helps more than hurts
+      if (playerScore > aiScore + 8) {
+        return { type: 'PLAY_WEATHER', cardInstanceId: weatherCard.instanceId };
+      }
+    }
+  }
+
+  // --- Restore: use if we have discarded units ---
+  const restoreCard = ai.hand.find(c => c.def.ability === 'restore');
+  if (restoreCard) {
+    const hasDiscards = ai.discard.some(u => u.def.type === 'unit' && u.def.ability !== 'heroic');
+    if (hasDiscards) {
+      if (restoreCard.def.type === 'special') return { type: 'PLAY_SPECIAL', cardInstanceId: restoreCard.instanceId };
+      if (restoreCard.def.row) return { type: 'PLAY_UNIT', cardInstanceId: restoreCard.instanceId, row: restoreCard.def.row as Row };
+    }
+  }
+
+  // --- Play strongest unit ---
+  const unitCards = ai.hand.filter(c => c.def.type === 'unit' && c.def.row);
   if (unitCards.length > 0) {
-    const best = unitCards.sort((a, b) => b.def.strength - a.def.strength)[0];
+    const best = [...unitCards].sort((a, b) => b.def.strength - a.def.strength)[0];
     return { type: 'PLAY_UNIT', cardInstanceId: best.instanceId, row: best.def.row as Row };
   }
 
-  // Play special
+  // --- Play a special card ---
   const special = ai.hand.find(c => c.def.type === 'special');
   if (special) {
     return { type: 'PLAY_SPECIAL', cardInstanceId: special.instanceId, targetRow: 'close' };
@@ -763,12 +702,12 @@ export function aiDecide(state: GameState): GameAction {
 export function createInitialState(playerFaction: Faction, aiFaction: Faction): GameState {
   const aiFactions: Faction[] = ['hellenic', 'vedic', 'norse', 'slavic', 'celtic', 'egyptian'];
   const randomAI = aiFactions[Math.floor(Math.random() * aiFactions.length)];
-  
+
   return {
     phase: 'mulligan',
     player: createPlayerState(playerFaction),
-    ai: createPlayerState(aiFaction || randomAI),
-    round: 1,
+    ai:     createPlayerState(aiFaction || randomAI),
+    round:  1,
     currentTurn: 'player',
     weatherEffects: { close: false, ranged: false, ritual: false },
     roundWinners: [],
