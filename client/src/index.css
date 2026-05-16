@@ -1,0 +1,650 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Cinzel+Decorative:wght@400;700&family=IM+Fell+English:ital@0;1&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Gwunt dark mythological palette */
+  --color-void: #080810;
+  --color-deep: #0E0E18;
+  --color-surface: #14141E;
+  --color-raised: #1A1A26;
+  --color-border: #2A2A3E;
+  --color-muted: #404058;
+  --color-text: #D0D0E8;
+  --color-text-dim: #8888A8;
+  --color-gold: #C8A040;
+  --color-gold-bright: #F0C84A;
+  --color-glow: #C8A04040;
+  
+  /* Row colors */
+  --close-color: #8B1A1A;
+  --close-glow: #C8303040;
+  --ranged-color: #1A5A8B;
+  --ranged-glow: #3080C840;
+  --ritual-color: #4A1A8B;
+  --ritual-glow: #8030C840;
+  
+  /* HSL for shadcn compatibility */
+  --background: 240 15% 4%;
+  --foreground: 240 10% 88%;
+  --card: 240 15% 8%;
+  --card-foreground: 240 10% 88%;
+  --popover: 240 15% 8%;
+  --popover-foreground: 240 10% 88%;
+  --primary: 43 60% 52%;
+  --primary-foreground: 240 15% 4%;
+  --secondary: 240 15% 12%;
+  --secondary-foreground: 240 10% 80%;
+  --muted: 240 12% 16%;
+  --muted-foreground: 240 8% 54%;
+  --accent: 43 60% 52%;
+  --accent-foreground: 240 15% 4%;
+  --destructive: 0 70% 45%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 15% 18%;
+  --input: 240 15% 18%;
+  --ring: 43 60% 52%;
+  --radius: 0.5rem;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-void);
+  color: var(--color-text);
+  font-family: 'IM Fell English', Georgia, serif;
+}
+
+.font-title { font-family: 'Cinzel Decorative', serif; }
+.font-heading { font-family: 'Cinzel', serif; }
+.font-body { font-family: 'IM Fell English', Georgia, serif; }
+
+/* Scrollable areas */
+.scrollable {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-muted) transparent;
+}
+.scrollable::-webkit-scrollbar { width: 4px; }
+.scrollable::-webkit-scrollbar-thumb { background: var(--color-muted); border-radius: 2px; }
+
+/* Card styles */
+.card-frame {
+  border: 2px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  position: relative;
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.card-frame:hover {
+  transform: translateY(-6px) scale(1.02);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.6), 0 0 20px var(--color-glow);
+  border-color: var(--color-gold);
+  z-index: 100;
+}
+
+.card-frame.dragging {
+  opacity: 0.85;
+  transform: scale(1.08) rotate(2deg);
+  cursor: grabbing;
+  z-index: 1000;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px var(--color-glow);
+}
+
+.card-frame.heroic {
+  border-color: var(--color-gold);
+  box-shadow: 0 0 12px var(--color-glow);
+}
+
+/* Row styles */
+.battlefield-row {
+  position: relative;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  min-height: 90px;
+  padding: 4px 8px;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.battlefield-row::-webkit-scrollbar { display: none; }
+
+.battlefield-row.close-row { border-left: 3px solid var(--close-color); }
+.battlefield-row.ranged-row { border-left: 3px solid var(--ranged-color); }
+.battlefield-row.ritual-row { border-left: 3px solid var(--ritual-color); }
+
+.battlefield-row.valid-drop {
+  border-color: var(--color-gold) !important;
+  box-shadow: 0 0 20px var(--color-glow), inset 0 0 20px rgba(200,160,64,0.08);
+  animation: dropPulse 1s ease-in-out infinite;
+}
+
+@keyframes dropPulse {
+  0%, 100% { box-shadow: 0 0 20px var(--color-glow), inset 0 0 20px rgba(200,160,64,0.08); }
+  50% { box-shadow: 0 0 30px rgba(200,160,64,0.6), inset 0 0 30px rgba(200,160,64,0.15); }
+}
+
+/* Score badges */
+.score-badge {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--color-gold);
+  background: rgba(200,160,64,0.1);
+  color: var(--color-gold-bright);
+  flex-shrink: 0;
+}
+
+/* Life gems / round markers */
+.round-gem {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+  transition: all 0.3s ease;
+}
+.round-gem.won { background: var(--color-gold); border-color: var(--color-gold-bright); box-shadow: 0 0 10px var(--color-glow); }
+.round-gem.lost { background: #8B1A1A; border-color: #C03030; }
+.round-gem.draw { background: #404040; border-color: #686868; }
+
+/* Tooltip for card preview */
+.card-preview-tooltip {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  filter: drop-shadow(0 20px 40px rgba(0,0,0,0.9));
+}
+
+/* Hand area */
+.hand-area {
+  display: flex;
+  align-items: flex-end;
+  padding: 8px 12px;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-height: 120px;
+}
+.hand-area::-webkit-scrollbar { display: none; }
+
+/* Ability badges */
+.ability-badge {
+  font-family: 'Cinzel', serif;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* Weather indicator */
+.weather-indicator {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'Cinzel', serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid;
+  animation: weatherPulse 2s ease-in-out infinite;
+}
+
+@keyframes weatherPulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
+}
+
+/* Glass effect for panels */
+.glass-panel {
+  background: rgba(14,14,24,0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+}
+
+/* Row label */
+.row-label {
+  font-family: 'Cinzel', serif;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+/* Portrait mode: game is fully responsive, no lock needed */
+
+/* Pass button */
+.pass-button {
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 20px;
+  border: 2px solid var(--color-muted);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.pass-button:hover {
+  border-color: var(--color-gold);
+  color: var(--color-gold);
+  box-shadow: 0 0 15px var(--color-glow);
+}
+
+/* AI thinking indicator */
+.ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Cinzel', serif;
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  letter-spacing: 0.1em;
+}
+.ai-thinking span {
+  animation: blink 1.2s ease-in-out infinite;
+}
+.ai-thinking span:nth-child(2) { animation-delay: 0.2s; }
+.ai-thinking span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
+/* Faction select cards */
+.faction-card {
+  border: 2px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.faction-card:hover, .faction-card.selected {
+  border-color: var(--color-gold);
+  box-shadow: 0 0 25px var(--color-glow);
+  transform: translateY(-4px);
+}
+
+/* Gallery filters */
+.filter-chip {
+  font-family: 'Cinzel', serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.filter-chip:hover, .filter-chip.active {
+  border-color: var(--color-gold);
+  color: var(--color-gold);
+  background: rgba(200,160,64,0.08);
+}
+
+/* ============================================================
+   GLOBAL NEW ANIMATIONS
+   ============================================================ */
+
+/* Skeleton shimmer for loading card art */
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Title screen logo float */
+@keyframes floatLogo {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-10px); }
+}
+
+/* Title glow pulse */
+@keyframes titleGlow {
+  0%, 100% { text-shadow: 0 0 40px rgba(200,160,64,0.7), 0 0 80px rgba(200,160,64,0.3), 0 2px 4px rgba(0,0,0,0.8); }
+  50%       { text-shadow: 0 0 60px rgba(200,160,64,0.9), 0 0 120px rgba(200,160,64,0.5), 0 2px 4px rgba(0,0,0,0.8); }
+}
+
+/* Card zoom modal */
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Cinematic transition */
+@keyframes cinematicIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes cinematicFlash {
+  0%   { opacity: 0; }
+  20%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes cinematicSwords {
+  from { opacity: 0; transform: scale(0.5); }
+  30%  { opacity: 1; transform: scale(1.1); }
+  60%  { transform: scale(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+@keyframes cinematicText {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes swordLeft {
+  from { transform: translate(-60px, 60px) rotate(-20deg); opacity: 0; }
+  to   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+}
+@keyframes swordRight {
+  from { transform: translate(60px, 60px) rotate(20deg); opacity: 0; }
+  to   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+}
+@keyframes expandRing {
+  from { opacity: 0.8; transform: scale(0.5); }
+  to   { opacity: 0;   transform: scale(2); }
+}
+
+/* Animations */
+@keyframes cardPlay {
+  from { transform: scale(1.15) translateY(-20px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
+}
+.card-entering {
+  animation: cardPlay 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.4s ease forwards;
+}
+
+/* Screen overlays */
+.overlay-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8,8,16,0.95);
+  backdrop-filter: blur(8px);
+}
+
+/* Parchment effect border */
+.parchment-border {
+  border: 2px solid;
+  border-image: linear-gradient(135deg, var(--color-gold), var(--color-muted), var(--color-gold)) 1;
+}
+
+/* Strength number */
+.strength-number {
+  font-family: 'Cinzel', serif;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* ============================================================
+   WEATHER CARD ANIMATIONS
+   Overlays rendered on top of card art for weather-type cards
+   ============================================================ */
+
+.weather-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* --- BLIZZARD (Fimbulwinter, Dead Winter, Morana Frost) --- */
+.weather-blizzard {
+  background: linear-gradient(180deg, rgba(160,200,255,0.08) 0%, rgba(80,140,220,0.04) 100%);
+}
+.weather-blizzard::before,
+.weather-blizzard::after {
+  content: '';
+  position: absolute;
+  inset: -20% -20%;
+  width: 140%;
+  height: 140%;
+  background-image:
+    radial-gradient(circle, rgba(220,240,255,0.9) 1px, transparent 1px),
+    radial-gradient(circle, rgba(180,220,255,0.6) 0.5px, transparent 0.5px);
+  background-size: 18px 18px, 10px 10px;
+  background-position: 0 0, 9px 9px;
+  animation: blizzardDrift1 3s linear infinite;
+  will-change: transform;
+}
+.weather-blizzard::after {
+  background-size: 14px 24px, 8px 12px;
+  opacity: 0.5;
+  animation: blizzardDrift2 2.2s linear infinite;
+}
+@keyframes blizzardDrift1 {
+  0%   { transform: translate(0, -10%) rotate(15deg); }
+  100% { transform: translate(-8%, 110%) rotate(15deg); }
+}
+@keyframes blizzardDrift2 {
+  0%   { transform: translate(5%, -10%) rotate(-10deg); }
+  100% { transform: translate(-5%, 110%) rotate(-10deg); }
+}
+
+/* --- RAIN (Monsoon Veil) --- */
+.weather-rain {
+  background: linear-gradient(180deg, rgba(40,80,160,0.12) 0%, rgba(20,50,120,0.06) 100%);
+}
+.weather-rain::before {
+  content: '';
+  position: absolute;
+  inset: -30% 0;
+  width: 100%;
+  height: 160%;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 8px,
+    rgba(100,160,255,0.35) 8px,
+    rgba(100,160,255,0.35) 10px
+  );
+  background-size: 4px 18px;
+  animation: rainFall 0.55s linear infinite;
+  will-change: transform;
+}
+.weather-rain::after {
+  content: '';
+  position: absolute;
+  inset: -30% 0;
+  width: 100%;
+  height: 160%;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 12px,
+    rgba(140,190,255,0.2) 12px,
+    rgba(140,190,255,0.2) 14px
+  );
+  background-size: 7px 26px;
+  animation: rainFall 0.75s linear infinite 0.2s;
+  will-change: transform;
+}
+@keyframes rainFall {
+  0%   { transform: translateY(-30%) skewX(-8deg); }
+  100% { transform: translateY(60%) skewX(-8deg); }
+}
+
+/* --- SANDSTORM (Blinding Sandstorm) --- */
+.weather-sandstorm {
+  background: linear-gradient(125deg, rgba(180,130,40,0.18) 0%, rgba(120,80,20,0.10) 100%);
+}
+.weather-sandstorm::before {
+  content: '';
+  position: absolute;
+  inset: -20% -20%;
+  width: 140%;
+  height: 140%;
+  background-image:
+    radial-gradient(ellipse 2px 1px, rgba(220,170,60,0.7) 0%, transparent 100%),
+    radial-gradient(ellipse 1px 1px, rgba(200,140,40,0.5) 0%, transparent 100%);
+  background-size: 6px 8px, 10px 12px;
+  animation: sandDrift 1.2s linear infinite;
+  will-change: transform;
+}
+.weather-sandstorm::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    125deg,
+    transparent 0px,
+    rgba(200,150,50,0.06) 2px,
+    transparent 4px,
+    transparent 20px
+  );
+  animation: sandWave 2s ease-in-out infinite alternate;
+}
+@keyframes sandDrift {
+  0%   { transform: translate(-10%, 0); }
+  100% { transform: translate(10%, -5%); }
+}
+@keyframes sandWave {
+  0%   { opacity: 0.4; transform: translateX(-3px); }
+  100% { opacity: 1;   transform: translateX(3px); }
+}
+
+/* --- MIST (Mist of Avalon, Oracle Drought heat haze) --- */
+.weather-mist {
+  background: linear-gradient(180deg,
+    rgba(150,180,200,0.0) 0%,
+    rgba(150,180,200,0.12) 40%,
+    rgba(180,200,220,0.18) 70%,
+    rgba(200,210,230,0.08) 100%
+  );
+  animation: mistDrift 5s ease-in-out infinite alternate;
+}
+.weather-mist::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 30% at 30% 60%, rgba(200,220,240,0.2) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 20% at 70% 40%, rgba(180,210,230,0.15) 0%, transparent 70%);
+  animation: mistPulse 4s ease-in-out infinite alternate;
+  will-change: opacity, transform;
+}
+.weather-mist::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 100% 25% at 50% 75%, rgba(210,230,250,0.18) 0%, transparent 80%);
+  animation: mistPulse 6s ease-in-out infinite alternate-reverse;
+}
+@keyframes mistDrift {
+  0%   { opacity: 0.6; }
+  50%  { opacity: 1; }
+  100% { opacity: 0.7; }
+}
+@keyframes mistPulse {
+  0%   { opacity: 0.5; transform: translateX(-6px) scaleX(1); }
+  100% { opacity: 1;   transform: translateX(6px) scaleX(1.05); }
+}
+
+/* --- ECLIPSE (Ashen Eclipse) --- */
+.weather-eclipse {
+  background: radial-gradient(circle at 50% 38%,
+    rgba(60,10,10,0.0) 20%,
+    rgba(40,5,5,0.3) 40%,
+    rgba(20,0,0,0.55) 70%,
+    rgba(10,0,0,0.5) 100%
+  );
+  animation: eclipseFlicker 4s ease-in-out infinite alternate;
+}
+.weather-eclipse::before {
+  content: '';
+  position: absolute;
+  top: 8%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 35%;
+  height: 28%;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 3px rgba(80,10,10,0.8),
+    0 0 12px 6px rgba(180,60,10,0.4),
+    0 0 24px 14px rgba(120,30,5,0.2);
+  background: radial-gradient(circle at 52% 48%,
+    rgba(10,0,0,0.95) 55%,
+    rgba(80,20,5,0.7) 75%,
+    rgba(180,60,10,0.3) 100%
+  );
+  animation: eclipsePulse 3s ease-in-out infinite alternate;
+}
+.weather-eclipse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    rgba(40,0,0,0.04) 1px,
+    transparent 2px,
+    transparent 6px
+  );
+  animation: ashFall 8s linear infinite;
+  pointer-events: none;
+}
+@keyframes eclipseFlicker {
+  0%   { opacity: 0.75; }
+  30%  { opacity: 1; }
+  60%  { opacity: 0.85; }
+  100% { opacity: 0.95; }
+}
+@keyframes eclipsePulse {
+  0%   { box-shadow: 0 0 0 3px rgba(80,10,10,0.8), 0 0 12px 6px rgba(180,60,10,0.4), 0 0 24px 14px rgba(120,30,5,0.2); }
+  100% { box-shadow: 0 0 0 3px rgba(120,20,10,0.9), 0 0 20px 10px rgba(220,80,15,0.5), 0 0 36px 20px rgba(160,50,10,0.3); }
+}
+@keyframes ashFall {
+  0%   { transform: translateY(-5%); }
+  100% { transform: translateY(5%); }
+}
