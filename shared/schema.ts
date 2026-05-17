@@ -66,6 +66,17 @@ export type GamePhase =
   | 'game-over'
   | 'gallery';
 
+// A single event that fires as part of an action (shown in notification banner)
+export interface GameEvent {
+  id: string;           // unique, for React keys
+  type: 'ability' | 'weather' | 'round' | 'pass' | 'doom' | 'restore' | 'seer' | 'warband' | 'leader';
+  who: 'player' | 'ai';
+  message: string;      // Human-readable description
+  cardName?: string;    // Card that triggered the event
+  targetName?: string;  // Card that was affected
+  icon?: string;        // Emoji icon
+}
+
 export interface GameState {
   phase: GamePhase;
   player: PlayerState;
@@ -78,4 +89,5 @@ export interface GameState {
   roundWinners: Array<'player' | 'ai' | 'draw'>;
   mulligansLeft: number;
   selectedFaction: Faction | null;
+  events: GameEvent[]; // Events from the last action — consumed by UI for notifications
 }

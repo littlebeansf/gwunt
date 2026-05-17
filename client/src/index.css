@@ -425,6 +425,238 @@ html, body, #root {
 }
 
 /* ============================================================
+   CARD DESTROY ANIMATION — shatter + fade
+   ============================================================ */
+@keyframes cardDestroy {
+  0%   { transform: scale(1)   rotate(0deg);    opacity: 1;   filter: brightness(1); }
+  20%  { transform: scale(1.15) rotate(-4deg);  opacity: 0.9; filter: brightness(2) saturate(0); }
+  40%  { transform: scale(0.9) rotate(6deg);    opacity: 0.6; filter: brightness(3) saturate(0); }
+  60%  { transform: scale(1.05) rotate(-8deg);  opacity: 0.35; filter: brightness(4) saturate(0); }
+  100% { transform: scale(0.4) rotate(15deg) translateY(-20px); opacity: 0; filter: brightness(5) saturate(0); }
+}
+.card-destroying {
+  animation: cardDestroy 0.55s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  pointer-events: none;
+  position: relative;
+  z-index: 200;
+}
+
+/* ============================================================
+   EVENT NOTIFICATION BANNER
+   ============================================================ */
+@keyframes notifSlideIn {
+  from { transform: translateX(110%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes notifSlideOut {
+  from { transform: translateX(0);    opacity: 1; }
+  to   { transform: translateX(110%); opacity: 0; }
+}
+.event-notif {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(10, 10, 20, 0.94);
+  border: 1px solid;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  font-family: 'Cinzel', serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1.45;
+  max-width: 280px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.event-notif.entering  { animation: notifSlideIn  0.28s cubic-bezier(0.22,1,0.36,1) forwards; }
+.event-notif.exiting   { animation: notifSlideOut 0.22s ease-in forwards; }
+.event-notif.doom      { border-color: #C03030; color: #E87070; }
+.event-notif.weather   { border-color: #3070C0; color: #80A8E8; }
+.event-notif.restore   { border-color: #50A050; color: #80D080; }
+.event-notif.seer      { border-color: #9040C0; color: #C080E8; }
+.event-notif.warband   { border-color: #C08030; color: #E0A860; }
+.event-notif.leader    { border-color: #C8A040; color: #F0C84A; }
+.event-notif.pass      { border-color: #404060; color: #8888A8; }
+.event-notif.round     { border-color: #C8A040; color: #F0D070; background: rgba(20,15,5,0.97); }
+.event-notif.ability   { border-color: #6040A0; color: #A080D0; }
+
+/* ============================================================
+   BATTLEFIELD WEATHER ROW OVERLAYS
+   Animated overlays applied directly to the battlefield rows
+   when weather is active on that row.
+   ============================================================ */
+.battlefield-row { position: relative; }
+
+/* Blizzard on row */
+.row-weather-blizzard::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    radial-gradient(circle, rgba(180,220,255,0.85) 1px, transparent 1px),
+    radial-gradient(circle, rgba(220,240,255,0.5) 0.5px, transparent 0.5px);
+  background-size: 16px 20px, 9px 11px;
+  background-position: 0 0, 8px 8px;
+  animation: rowBlizzard 2.5s linear infinite;
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+@keyframes rowBlizzard {
+  0%   { background-position: 0 -10px, 8px 0px; }
+  100% { background-position: -4px 80px, 4px 90px; }
+}
+
+/* Rain on row */
+.row-weather-rain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 5px,
+    rgba(100,160,255,0.4) 5px, rgba(100,160,255,0.4) 7px
+  );
+  background-size: 3px 14px;
+  animation: rowRain 0.4s linear infinite;
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+@keyframes rowRain {
+  0%   { background-position: 0 -14px; }
+  100% { background-position: 0 14px; }
+}
+
+/* Sandstorm on row */
+.row-weather-sandstorm::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    radial-gradient(ellipse 3px 1px, rgba(220,160,40,0.7) 0%, transparent 100%),
+    radial-gradient(ellipse 2px 1px, rgba(200,130,30,0.5) 0%, transparent 100%);
+  background-size: 8px 10px, 12px 14px;
+  animation: rowSand 0.9s linear infinite;
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+@keyframes rowSand {
+  0%   { background-position: -10px 0, 0 4px; }
+  100% { background-position: 40px 0, 50px 4px; }
+}
+
+/* Mist on row */
+.row-weather-mist::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background: linear-gradient(90deg,
+    rgba(160,190,220,0) 0%,
+    rgba(160,190,220,0.18) 25%,
+    rgba(180,210,240,0.26) 50%,
+    rgba(160,190,220,0.18) 75%,
+    rgba(160,190,220,0) 100%
+  );
+  animation: rowMist 4s ease-in-out infinite alternate;
+}
+@keyframes rowMist {
+  0%   { opacity: 0.4; transform: scaleX(0.97); }
+  100% { opacity: 1;   transform: scaleX(1.03); }
+}
+
+/* Eclipse on row */
+.row-weather-eclipse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background: radial-gradient(ellipse at 50% 40%,
+    rgba(50,10,10,0.0) 20%,
+    rgba(30,5,5,0.35) 60%,
+    rgba(15,0,0,0.5) 100%
+  );
+  animation: rowEclipse 3s ease-in-out infinite alternate;
+}
+@keyframes rowEclipse {
+  0%   { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+/* Generic frost (close-row blizzard alias) */
+.row-weather-frost::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    radial-gradient(circle, rgba(180,220,255,0.9) 1px, transparent 1px),
+    radial-gradient(circle, rgba(220,240,255,0.6) 0.5px, transparent 0.5px);
+  background-size: 14px 18px, 8px 10px;
+  animation: rowBlizzard 2s linear infinite;
+  mix-blend-mode: screen;
+  opacity: 0.6;
+}
+
+/* ============================================================
+   FACTION TOOLTIP
+   ============================================================ */
+.faction-tooltip {
+  position: absolute;
+  z-index: 8000;
+  background: rgba(8,8,16,0.97);
+  border: 1px solid var(--color-gold);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 220px;
+  max-width: 280px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.8), 0 0 20px rgba(200,160,64,0.15);
+  animation: fadeIn 0.18s ease;
+  pointer-events: none;
+}
+.faction-tooltip-title {
+  font-family: 'Cinzel Decorative', serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-gold-bright);
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.faction-tooltip-row {
+  font-family: 'Cinzel', serif;
+  font-size: 0.55rem;
+  color: var(--color-text-dim);
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+.faction-tooltip-ability {
+  font-family: 'IM Fell English', serif;
+  font-size: 0.62rem;
+  font-style: italic;
+  color: var(--color-text);
+  line-height: 1.5;
+  border-top: 1px solid var(--color-border);
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+/* ============================================================
    WEATHER CARD ANIMATIONS
    Overlays rendered on top of card art for weather-type cards
    ============================================================ */

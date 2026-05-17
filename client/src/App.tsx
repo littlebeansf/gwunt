@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { GameState, GamePhase, Faction, Row, CardInstance } from '../../shared/schema';
+import type { GameState, GamePhase, Faction, Row, CardInstance, GameEvent } from '../../shared/schema';
 import { 
   createInitialState, 
   applyAction, 
@@ -737,6 +737,137 @@ function MuteButton() {
 }
 
 // ============================
+// Event Notification Banner (Toast Queue)
+// ============================
+interface ToastItem {
+  id: string;
+  event: GameEvent;
+  state: 'entering' | 'visible' | 'exiting';
+}
+
+function EventNotificationBanner({ events }: { events: GameEvent[] }) {
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const seenIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!events || events.length === 0) return;
+    const newEvents = events.filter(e => !seenIds.current.has(e.id));
+    if (newEvents.length === 0) return;
+    newEvents.forEach(e => seenIds.current.add(e.id));
+
+    setToasts(prev => {
+      const added: ToastItem[] = newEvents.map(e => ({ id: e.id, event: e, state: 'entering' as const }));
+      return [...prev, ...added].slice(-6); // max 6 toasts in queue
+    });
+
+    // After 200ms switch entering → visible
+    const t1 = setTimeout(() => {
+      setToasts(prev => prev.map(t =>
+        newEvents.some(e => e.id === t.id) ? { ...t, state: 'visible' as const } : t
+      ));
+    }, 200);
+
+    // After 3.2s switch visible → exiting
+    const t2 = setTimeout(() => {
+      setToasts(prev => prev.map(t =>
+        newEvents.some(e => e.id === t.id) ? { ...t, state: 'exiting' as const } : t
+      ));
+    }, 3200);
+
+    // After 3.7s remove
+    const t3 = setTimeout(() => {
+      setToasts(prev => prev.filter(t => !newEvents.some(e => e.id === t.id)));
+    }, 3700);
+
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [events]);
+
+  if (toasts.length === 0) return null;
+
+  return (
+    <div style={{
+      position: 'fixed', top: 60, right: 12, zIndex: 8500,
+      display: 'flex', flexDirection: 'column', gap: 6,
+      pointerEvents: 'none', maxWidth: 300,
+    }}>
+      {toasts.map(toast => (
+        <div
+          key={toast.id}
+          className={`event-notif ${toast.event.type} ${toast.state}`}
+        >
+          {toast.event.icon && <span style={{ fontSize: '1rem', flexShrink: 0 }}>{toast.event.icon}</span>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {toast.event.cardName && (
+              <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.58rem', fontWeight: 700, color: '#E8D080', letterSpacing: '0.04em' }}>
+                {toast.event.cardName}
+              </div>
+            )}
+            <div style={{ fontFamily: 'IM Fell English, serif', fontSize: '0.65rem', color: '#C8C0A8', fontStyle: 'italic', lineHeight: 1.35 }}>
+              {toast.event.message}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================
+// Faction Tooltip
+// ============================
+function FactionTooltip({ factionId, anchorRef, side }: {
+  factionId: string;
+  anchorRef: React.RefObject<HTMLElement>;
+  side: 'left' | 'right';
+}) {
+  const f = FACTIONS[factionId];
+  if (!f) return null;
+
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!anchorRef.current) return;
+    const rect = anchorRef.current.getBoundingClientRect();
+    const top = rect.bottom + 6;
+    const left = side === 'right' ? rect.left : rect.right - 260;
+    setPos({ top, left: Math.max(8, Math.min(left, window.innerWidth - 268)) });
+  }, [anchorRef, side]);
+
+  return (
+    <div
+      className="faction-tooltip"
+      style={{
+        position: 'fixed',
+        top: pos.top,
+        left: pos.left,
+        zIndex: 9100,
+        width: 260,
+        borderColor: f.colors.accent + '60',
+        animation: 'fadeIn 0.15s ease',
+      }}
+    >
+      <div className="faction-tooltip-title" style={{ color: f.colors.accent }}>
+        {f.emoji} {f.name}
+      </div>
+      <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.5rem', color: f.colors.accent + '80', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>
+        {f.subtitle}
+      </div>
+      <div className="faction-tooltip-row">
+        <span>Playstyle</span>
+        <span>{f.playstyle}</span>
+      </div>
+      <div className="faction-tooltip-row" style={{ marginTop: 6 }}>
+        <span>Leader</span>
+        <span style={{ color: f.colors.accent }}>{f.leaderName}</span>
+      </div>
+      <div className="faction-tooltip-ability">
+        {f.leaderAbility}
+      </div>
+    </div>
+  );
+}
+
+// ============================
 // Cinematic Transition
 // ============================
 function CinematicTransition({ onDone }: { onDone: () => void }) {
@@ -907,11 +1038,13 @@ function MulliganScreen({ state, onMulligan, onReady }: { state: GameState; onMu
 // ============================
 // Mobile Row Component
 // ============================
-function MobileBattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeather, onTap, onCardClick }: {
+function MobileBattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeather, weatherClass, onTap, onCardClick, destroyedIds }: {
   row: { units: CardInstance[] }; label: string; rowType: Row;
   isEnemy: boolean; isValidDrop?: boolean; score: number; hasWeather: boolean;
+  weatherClass?: string;
   onTap?: () => void;
   onCardClick?: (card: CardInstance) => void;
+  destroyedIds?: Set<string>;
 }) {
   const color = { close: '#C03030', ranged: '#3080C0', ritual: '#8030C0' }[rowType];
   return (
@@ -934,9 +1067,14 @@ function MobileBattleRow({ row, label, rowType, isEnemy, isValidDrop, score, has
         {hasWeather && <div style={{ fontSize: '0.45rem', color: '#80A8E8' }}>❄</div>}
       </div>
       {/* Cards scrollable */}
-      <div style={{ flex: 1, display: 'flex', gap: 3, overflowX: 'auto', alignItems: 'center', paddingRight: 2 } as React.CSSProperties}>
+      <div className={weatherClass || ''} style={{ flex: 1, display: 'flex', gap: 3, overflowX: 'auto', alignItems: 'center', paddingRight: 2, position: 'relative' } as React.CSSProperties}>
         {row.units.map(card => (
-          <div key={card.instanceId} onClick={e => { e.stopPropagation(); onCardClick?.(card); }} style={{ flexShrink: 0, cursor: 'zoom-in' }}>
+          <div
+            key={card.instanceId}
+            className={destroyedIds?.has(card.instanceId) ? 'card-destroying' : ''}
+            onClick={e => { e.stopPropagation(); onCardClick?.(card); }}
+            style={{ flexShrink: 0, cursor: 'zoom-in' }}
+          >
             <CardComponent card={card} size="sm" style={{ width: 52, height: 78 }} />
           </div>
         ))}
@@ -953,11 +1091,13 @@ function MobileBattleRow({ row, label, rowType, isEnemy, isValidDrop, score, has
 // ============================
 // Row Component
 // ============================
-function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeather, onPointerEnter, onPointerLeave, onCardClick }: {
+function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeather, weatherClass, onPointerEnter, onPointerLeave, onCardClick, destroyedIds }: {
   row: { units: CardInstance[] }; label: string; rowType: Row;
   isEnemy: boolean; isValidDrop: boolean; score: number; hasWeather: boolean;
+  weatherClass?: string;
   onPointerEnter?: () => void; onPointerLeave?: () => void;
   onCardClick?: (card: CardInstance) => void;
+  destroyedIds?: Set<string>;
 }) {
   const color = { close: '#C03030', ranged: '#3080C0', ritual: '#8030C0' }[rowType];
   return (
@@ -970,13 +1110,18 @@ function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeathe
         </div>
       </div>
       <div
-        className={`battlefield-row ${rowType}-row ${isValidDrop ? 'valid-drop' : ''}`}
-        style={{ flex: 1, background: isEnemy ? 'rgba(255,60,60,0.03)' : 'rgba(60,60,255,0.03)', minHeight: 100, overflowX: 'auto' }}
+        className={`battlefield-row ${rowType}-row ${isValidDrop ? 'valid-drop' : ''} ${weatherClass || ''}`}
+        style={{ flex: 1, background: isEnemy ? 'rgba(255,60,60,0.03)' : 'rgba(60,60,255,0.03)', minHeight: 100, overflowX: 'auto', position: 'relative' }}
         onPointerEnter={onPointerEnter}
         onPointerLeave={onPointerLeave}
       >
         {row.units.map(card => (
-          <div key={card.instanceId} onClick={() => onCardClick?.(card)} style={{ cursor: 'zoom-in' }}>
+          <div
+            key={card.instanceId}
+            className={destroyedIds?.has(card.instanceId) ? 'card-destroying' : ''}
+            onClick={() => onCardClick?.(card)}
+            style={{ cursor: 'zoom-in' }}
+          >
             <CardComponent card={card} size="sm" />
           </div>
         ))}
@@ -993,6 +1138,28 @@ function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeathe
 // ============================
 // Battle Screen
 // ============================
+// Helper: get all card instance IDs currently on both battlefields
+function getAllBattlefieldIds(state: GameState): Set<string> {
+  const ids = new Set<string>();
+  (['close','ranged','ritual'] as Row[]).forEach(row => {
+    state.player.battlefield[row].units.forEach(c => ids.add(c.instanceId));
+    state.ai.battlefield[row].units.forEach(c => ids.add(c.instanceId));
+  });
+  return ids;
+}
+
+// Helper: get weather overlay class from active weather effects
+function getWeatherClass(hasWeather: boolean, rowType: Row): string {
+  if (!hasWeather) return '';
+  // Map row type to a single overlay style (blizzard covers all cases cleanly)
+  const map: Record<Row, string> = {
+    close:  'row-weather-blizzard',
+    ranged: 'row-weather-rain',
+    ritual: 'row-weather-mist',
+  };
+  return map[rowType] || 'row-weather-blizzard';
+}
+
 function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction: (action: any, who: 'player' | 'ai') => void; onSave: () => void }) {
   const isMobile = useIsMobile();
   const [drag, setDrag] = useState<DragState>({ card: null, x: 0, y: 0, startX: 0, startY: 0, active: false });
@@ -1004,6 +1171,37 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
   // Mobile tap-to-play: selected card from hand
   const [selectedCard, setSelectedCard] = useState<CardInstance | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Faction tooltip state
+  const [showPlayerTooltip, setShowPlayerTooltip] = useState(false);
+  const [showAiTooltip, setShowAiTooltip] = useState(false);
+  const playerFactionRef = useRef<HTMLDivElement>(null);
+  const aiFactionRef = useRef<HTMLDivElement>(null);
+
+  // Destroyed card tracking — cards that just left the battlefield
+  const [destroyedIds, setDestroyedIds] = useState<Set<string>>(new Set());
+  const prevBattlefieldIdsRef = useRef<Set<string>>(new Set());
+
+  // Detect removed cards each time state changes
+  useEffect(() => {
+    const current = getAllBattlefieldIds(state);
+    const prev = prevBattlefieldIdsRef.current;
+    const removed = new Set<string>();
+    prev.forEach(id => { if (!current.has(id)) removed.add(id); });
+    if (removed.size > 0) {
+      // Add to destroying set temporarily
+      setDestroyedIds(d => new Set([...d, ...removed]));
+      // Clean up after animation completes (~600ms)
+      setTimeout(() => {
+        setDestroyedIds(d => {
+          const next = new Set(d);
+          removed.forEach(id => next.delete(id));
+          return next;
+        });
+      }, 600);
+    }
+    prevBattlefieldIdsRef.current = current;
+  }, [state]);
 
   const playerFaction = FACTIONS[state.player.faction];
   const aiFaction = FACTIONS[state.ai.faction];
@@ -1155,7 +1353,12 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
             <div className="score-badge" style={{ width: 28, height: 28, fontSize: '0.85rem', background: aiScore > playerScore ? 'rgba(200,50,50,0.15)' : 'rgba(8,8,16,0.8)', borderColor: aiScore > playerScore ? '#C03030' : '#404058' }}>{aiScore}</div>
             <div>
-              <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#C03030' }}>{aiFaction?.name}</div>
+              <div
+                ref={aiFactionRef as React.RefObject<HTMLDivElement>}
+                onMouseEnter={() => setShowAiTooltip(true)}
+                onMouseLeave={() => setShowAiTooltip(false)}
+                style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#C03030', cursor: 'help', userSelect: 'none' }}
+              >{aiFaction?.name}</div>
               <div style={{ display: 'flex', gap: 2, marginTop: 1 }}>
                 {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'ai' ? 'won' : w === 'player' ? 'lost' : 'draw'}`} style={{ width: 6, height: 6 }} />))}
                 {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'ai').length) }).map((_, i) => (<div key={`ea${i}`} className="round-gem" style={{ width: 6, height: 6 }} />))}
@@ -1175,7 +1378,12 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
           {/* Player side */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, justifyContent: 'flex-end' }}>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#C8A040' }}>{playerFaction?.name}</div>
+              <div
+                ref={playerFactionRef as React.RefObject<HTMLDivElement>}
+                onMouseEnter={() => setShowPlayerTooltip(true)}
+                onMouseLeave={() => setShowPlayerTooltip(false)}
+                style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#C8A040', cursor: 'help', userSelect: 'none' }}
+              >{playerFaction?.name}</div>
               <div style={{ display: 'flex', gap: 2, marginTop: 1, justifyContent: 'flex-end' }}>
                 {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'player' ? 'won' : w === 'ai' ? 'lost' : 'draw'}`} style={{ width: 6, height: 6 }} />))}
                 {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'player').length) }).map((_, i) => (<div key={`ep${i}`} className="round-gem" style={{ width: 6, height: 6 }} />))}
@@ -1198,7 +1406,7 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
         {/* AI Battlefield (compact, scrollable-x) */}
         <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 1, padding: '2px 6px', borderBottom: '1px solid rgba(200,50,50,0.15)', background: 'rgba(30,8,8,0.3)' }}>
           {(['ritual','ranged','close'] as Row[]).map(row => (
-            <MobileBattleRow key={row} row={(state.ai.battlefield as any)[row]} label={row} rowType={row} isEnemy={true} hasWeather={(state.weatherEffects as any)[row]} score={getRowScore((state.ai.battlefield as any)[row])} onCardClick={setZoomedCard} />
+            <MobileBattleRow key={row} row={(state.ai.battlefield as any)[row]} label={row} rowType={row} isEnemy={true} hasWeather={(state.weatherEffects as any)[row]} weatherClass={getWeatherClass((state.weatherEffects as any)[row], row)} score={getRowScore((state.ai.battlefield as any)[row])} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
           ))}
         </div>
 
@@ -1208,10 +1416,11 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
         {/* Player Battlefield */}
         <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 1, padding: '2px 6px', borderBottom: '1px solid rgba(64,64,255,0.12)', background: 'rgba(8,8,30,0.3)' }}>
           {(['close','ranged','ritual'] as Row[]).map(row => (
-            <MobileBattleRow key={row} row={(state.player.battlefield as any)[row]} label={row} rowType={row} isEnemy={false} hasWeather={(state.weatherEffects as any)[row]} score={getRowScore((state.player.battlefield as any)[row])}
+            <MobileBattleRow key={row} row={(state.player.battlefield as any)[row]} label={row} rowType={row} isEnemy={false} hasWeather={(state.weatherEffects as any)[row]} weatherClass={getWeatherClass((state.weatherEffects as any)[row], row)} score={getRowScore((state.player.battlefield as any)[row])}
               isValidDrop={isMobileValidRow(row)}
               onTap={() => handleMobileTapRow(row)}
               onCardClick={setZoomedCard}
+              destroyedIds={destroyedIds}
             />
           ))}
         </div>
@@ -1257,6 +1466,9 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
         </div>
 
         {zoomedCard && <CardZoomModal card={zoomedCard} onClose={() => setZoomedCard(null)} />}
+        <EventNotificationBanner events={state.events || []} />
+        {showAiTooltip && aiFaction && <FactionTooltip factionId={state.ai.faction} anchorRef={aiFactionRef} side="left" />}
+        {showPlayerTooltip && playerFaction && <FactionTooltip factionId={state.player.faction} anchorRef={playerFactionRef} side="right" />}
         <MuteButton />
       </div>
     );
@@ -1270,7 +1482,13 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
         {/* AI info */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 180 }}>
           <div style={{ textAlign: 'right' }}>
-            <div className="font-heading" style={{ fontSize: '0.7rem', color: '#C03030', letterSpacing: '0.1em' }}>{aiFaction?.name}</div>
+            <div
+              ref={aiFactionRef as React.RefObject<HTMLDivElement>}
+              className="font-heading"
+              onMouseEnter={() => setShowAiTooltip(true)}
+              onMouseLeave={() => setShowAiTooltip(false)}
+              style={{ fontSize: '0.7rem', color: '#C03030', letterSpacing: '0.1em', cursor: 'help', userSelect: 'none' }}
+            >{aiFaction?.name}</div>
             <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#604040', letterSpacing: '0.05em' }}>Hand: {state.ai.hand.length} · Deck: {state.ai.deck.length}</div>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -1311,7 +1529,13 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
             {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'player').length) }).map((_, i) => (<div key={`ep${i}`} className="round-gem" />))}
           </div>
           <div>
-            <div className="font-heading" style={{ fontSize: '0.7rem', color: '#C8A040', letterSpacing: '0.1em' }}>{playerFaction?.name}</div>
+            <div
+              ref={playerFactionRef as React.RefObject<HTMLDivElement>}
+              className="font-heading"
+              onMouseEnter={() => setShowPlayerTooltip(true)}
+              onMouseLeave={() => setShowPlayerTooltip(false)}
+              style={{ fontSize: '0.7rem', color: '#C8A040', letterSpacing: '0.1em', cursor: 'help', userSelect: 'none' }}
+            >{playerFaction?.name}</div>
             <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#604020', letterSpacing: '0.05em' }}>Hand: {state.player.hand.length} · Deck: {state.player.deck.length}</div>
           </div>
         </div>
@@ -1321,9 +1545,9 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '4px 8px', gap: 0, overflow: 'hidden', minHeight: 0 }}>
         {/* AI side */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minHeight: 0, paddingBottom: 4, overflowY: 'auto' }}>
-          <BattleRow row={state.ai.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy hasWeather={state.weatherEffects.ritual} isValidDrop={false} score={getRowScore(state.ai.battlefield.ritual)} onCardClick={setZoomedCard} />
-          <BattleRow row={state.ai.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy hasWeather={state.weatherEffects.ranged} isValidDrop={false} score={getRowScore(state.ai.battlefield.ranged)} onCardClick={setZoomedCard} />
-          <BattleRow row={state.ai.battlefield.close} label="Close" rowType="close" isEnemy hasWeather={state.weatherEffects.close} isValidDrop={false} score={getRowScore(state.ai.battlefield.close)} onCardClick={setZoomedCard} />
+          <BattleRow row={state.ai.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy hasWeather={state.weatherEffects.ritual} weatherClass={getWeatherClass(state.weatherEffects.ritual, 'ritual')} isValidDrop={false} score={getRowScore(state.ai.battlefield.ritual)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
+          <BattleRow row={state.ai.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy hasWeather={state.weatherEffects.ranged} weatherClass={getWeatherClass(state.weatherEffects.ranged, 'ranged')} isValidDrop={false} score={getRowScore(state.ai.battlefield.ranged)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
+          <BattleRow row={state.ai.battlefield.close} label="Close" rowType="close" isEnemy hasWeather={state.weatherEffects.close} weatherClass={getWeatherClass(state.weatherEffects.close, 'close')} isValidDrop={false} score={getRowScore(state.ai.battlefield.close)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
         </div>
 
         {/* Center divider — clearly separates the two sides */}
@@ -1335,9 +1559,9 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
 
         {/* Player side */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minHeight: 0, paddingTop: 4, overflowY: 'auto' }}>
-          <BattleRow row={state.player.battlefield.close} label="Close" rowType="close" isEnemy={false} hasWeather={state.weatherEffects.close} isValidDrop={isValidRow('close') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.close)} onPointerEnter={() => setHoveredRow('close')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} />
-          <BattleRow row={state.player.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy={false} hasWeather={state.weatherEffects.ranged} isValidDrop={isValidRow('ranged') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ranged)} onPointerEnter={() => setHoveredRow('ranged')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} />
-          <BattleRow row={state.player.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy={false} hasWeather={state.weatherEffects.ritual} isValidDrop={isValidRow('ritual') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ritual)} onPointerEnter={() => setHoveredRow('ritual')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} />
+          <BattleRow row={state.player.battlefield.close} label="Close" rowType="close" isEnemy={false} hasWeather={state.weatherEffects.close} weatherClass={getWeatherClass(state.weatherEffects.close, 'close')} isValidDrop={isValidRow('close') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.close)} onPointerEnter={() => setHoveredRow('close')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
+          <BattleRow row={state.player.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy={false} hasWeather={state.weatherEffects.ranged} weatherClass={getWeatherClass(state.weatherEffects.ranged, 'ranged')} isValidDrop={isValidRow('ranged') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ranged)} onPointerEnter={() => setHoveredRow('ranged')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
+          <BattleRow row={state.player.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy={false} hasWeather={state.weatherEffects.ritual} weatherClass={getWeatherClass(state.weatherEffects.ritual, 'ritual')} isValidDrop={isValidRow('ritual') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ritual)} onPointerEnter={() => setHoveredRow('ritual')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
         </div>
       </div>
 
@@ -1401,6 +1625,9 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
       )}
 
       {zoomedCard && <CardZoomModal card={zoomedCard} onClose={() => setZoomedCard(null)} />}
+      <EventNotificationBanner events={state.events || []} />
+      {showAiTooltip && aiFaction && <FactionTooltip factionId={state.ai.faction} anchorRef={aiFactionRef} side="left" />}
+      {showPlayerTooltip && playerFaction && <FactionTooltip factionId={state.player.faction} anchorRef={playerFactionRef} side="right" />}
       <MuteButton />
     </div>
   );

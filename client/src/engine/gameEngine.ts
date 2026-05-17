@@ -1,5 +1,10 @@
-import type { CardDef, CardInstance, PlayerState, BattlefieldState, RowState, GameState, Faction, Row } from '../../../shared/schema';
+import type { CardDef, CardInstance, PlayerState, BattlefieldState, RowState, GameState, GameEvent, Faction, Row } from '../../../shared/schema';
 import { buildStarterDeck } from '../data/cards';
+
+let eventCounter = 0;
+function mkEvent(e: Omit<GameEvent, 'id'>): GameEvent {
+  return { ...e, id: `evt_${++eventCounter}_${Date.now()}` };
+}
 
 let instanceCounter = 0;
 
@@ -232,8 +237,10 @@ function recalcBoth(s: GameState): GameState {
 // ─── Core action reducer ─────────────────────────────────────────────────────
 
 export function applyAction(state: GameState, action: GameAction, who: 'player' | 'ai'): GameState {
-  let s = { ...state };
+  // Clear events from the previous action
+  let s = { ...state, events: [] as GameEvent[] };
   const opponent = who === 'player' ? 'ai' : 'player';
+  const whoLabel = who === 'player' ? 'You' : 'AI';
 
   switch (action.type) {
 
@@ -248,21 +255,29 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
       let bf = { ...s[who].battlefield };
       bf[row] = addToRow(bf[row], { ...card, currentStrength: card.def.strength, isWeatherReduced: false });
 
+      const unitEvents: GameEvent[] = [];
+
       let newS: GameState = {
         ...s,
         [who]: { ...s[who], hand, battlefield: bf },
-        lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
+        lastAction: `${whoLabel} played ${card.def.name}`,
       };
 
       // Warband: pull all copies from deck immediately
       if (card.def.ability === 'warband') {
+        const before = newS[who].deck.length;
         newS = pullWarbandFromDeck(newS, who, card.def);
+        const pulled = before - newS[who].deck.length;
+        if (pulled > 0) {
+          unitEvents.push(mkEvent({ type: 'warband', who, message: `${whoLabel} summoned ${pulled} allied ${card.def.name} from the deck!`, cardName: card.def.name, icon: '⚔' }));
+        }
       }
 
-      // Seer: player draws 2 cards (the seer card stays in own row — we don't move it to opponent)
+      // Seer: player draws 2 cards
       if (card.def.ability === 'seer') {
         const drawn = newS[who].deck.slice(0, 2);
         newS[who] = { ...newS[who], hand: [...newS[who].hand, ...drawn], deck: newS[who].deck.slice(2) };
+        unitEvents.push(mkEvent({ type: 'seer', who, message: `${whoLabel} draw ${drawn.length} card${drawn.length !== 1 ? 's' : ''} from the Seer's vision.`, cardName: card.def.name, icon: '🔮' }));
       }
 
       // Doom: destroy the single strongest non-heroic card on the entire field
@@ -277,6 +292,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
             if (removed) {
               newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
+              unitEvents.push(mkEvent({ type: 'doom', who, message: `${card.def.name} dooms ${removed.def.name} (${removed.currentStrength} str) — destroyed!`, cardName: card.def.name, targetName: removed.def.name, icon: '💀' }));
             }
           }
         }
@@ -296,25 +312,29 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
             battlefield: { ...newS[who].battlefield, [revRow]: addToRow(newS[who].battlefield[revRow], revived) },
           };
+          unitEvents.push(mkEvent({ type: 'restore', who, message: `${whoLabel} revive ${toRevive.def.name} from the discard pile!`, cardName: card.def.name, targetName: toRevive.def.name, icon: '✨' }));
         }
       }
 
-      return recalcBoth({ ...newS, currentTurn: opponent });
+      return recalcBoth({ ...newS, events: [...s.events, ...unitEvents], currentTurn: opponent });
     }
 
     case 'PLAY_SPECIAL': {
       const { card, hand } = removeFromHand(s[who].hand, action.cardInstanceId);
       if (!card) return s;
 
+      const spEvents: GameEvent[] = [];
+
       let newS: GameState = {
         ...s,
         [who]: { ...s[who], hand },
-        lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
+        lastAction: `${whoLabel} played ${card.def.name}`,
       };
 
       // Clear weather (Dawn Invocation / any card with "Remove all weather" in description)
       if (card.def.ability === 'special' && (card.def.name === 'Dawn Invocation' || card.def.description.toLowerCase().includes('remove all weather'))) {
         newS = { ...newS, weatherEffects: { close: false, ranged: false, ritual: false } };
+        spEvents.push(mkEvent({ type: 'weather', who, message: `${card.def.name} — all weather has been dispelled!`, cardName: card.def.name, icon: '☀️' }));
       }
 
       // Commander: mark a row for doubling
@@ -328,6 +348,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
               [targetRow]: { ...newS[who].battlefield[targetRow], hasCommander: true },
             },
           };
+          spEvents.push(mkEvent({ type: 'ability', who, message: `${whoLabel} double the ${targetRow} row with ${card.def.name}!`, cardName: card.def.name, icon: '★' }));
         }
       }
 
@@ -338,6 +359,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
           const { bf: newBf, removed } = removeUnitFromBattlefield(newS[target.owner].battlefield, target.unit.instanceId);
           if (removed) {
             newS = { ...newS, [target.owner]: { ...newS[target.owner], battlefield: newBf, discard: [...newS[target.owner].discard, removed] } };
+            spEvents.push(mkEvent({ type: 'doom', who, message: `${card.def.name} dooms ${removed.def.name} (${removed.currentStrength}) — destroyed!`, cardName: card.def.name, targetName: removed.def.name, icon: '💀' }));
           }
         }
       }
@@ -356,6 +378,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
             battlefield: { ...newS[who].battlefield, [revRow]: addToRow(newS[who].battlefield[revRow], revived) },
           };
+          spEvents.push(mkEvent({ type: 'restore', who, message: `${whoLabel} revive ${toRevive.def.name} from the discard!`, cardName: card.def.name, targetName: toRevive.def.name, icon: '✨' }));
         }
       }
 
@@ -373,6 +396,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
           ),
         };
         newS[who] = { ...newS[who], battlefield: { ...newS[who].battlefield, [targetRow]: buffedRow } };
+        spEvents.push(mkEvent({ type: 'ability', who, message: `${card.def.name} boosts the ${targetRow} row by +${buffAmt}!`, cardName: card.def.name, icon: '⬆️' }));
       }
 
       // Recall: return one friendly non-heroic unit from battlefield to hand
@@ -384,6 +408,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             battlefield: newBf,
             hand: [...newS[who].hand, { ...removed, currentStrength: removed.def.strength, isWeatherReduced: false }],
           };
+          spEvents.push(mkEvent({ type: 'ability', who, message: `${card.def.name} returns ${removed.def.name} to hand.`, cardName: card.def.name, targetName: removed.def.name, icon: '🔄' }));
         }
       }
 
@@ -392,6 +417,7 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
         if (newS[who].deck.length > 0) {
           const drawn = newS[who].deck[0];
           newS[who] = { ...newS[who], hand: [...newS[who].hand, drawn], deck: newS[who].deck.slice(1) };
+          spEvents.push(mkEvent({ type: 'ability', who, message: `Soma Offering grants ${whoLabel} a card draw.`, cardName: card.def.name, icon: '🎀' }));
         }
       }
 
@@ -405,16 +431,18 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
           currentStrength: 4, isWeatherReduced: false, isCommanderDoubled: false,
         };
         newS[opponent] = { ...newS[opponent], hand: [...newS[opponent].hand, token] };
+        spEvents.push(mkEvent({ type: 'ability', who, message: `Veles Bargain: ${whoLabel} draw 2 — the opponent receives a Veles Token.`, cardName: card.def.name, icon: '🤝' }));
       }
 
       // Odin Ravens: draw 1
       if (card.def.name === 'Odin Ravens') {
         if (newS[who].deck.length > 0) {
           newS[who] = { ...newS[who], hand: [...newS[who].hand, newS[who].deck[0]], deck: newS[who].deck.slice(1) };
+          spEvents.push(mkEvent({ type: 'ability', who, message: `Odin’s Ravens whisper a card to ${whoLabel}.`, cardName: card.def.name, icon: '🐦' }));
         }
       }
 
-      return recalcBoth({ ...newS, currentTurn: opponent });
+      return recalcBoth({ ...newS, events: [...s.events, ...spEvents], currentTurn: opponent });
     }
 
     case 'PLAY_WEATHER': {
@@ -429,11 +457,15 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
         weather[target as 'close' | 'ranged' | 'ritual'] = true;
       }
 
+      const rowNames = target === 'all' ? 'all rows' : `the ${target} row`;
+      const weatherEvent = mkEvent({ type: 'weather', who, message: `${card.def.name} engulfs ${rowNames} in weather — non-heroic units reduced to 1!`, cardName: card.def.name, icon: '❄️' });
+
       return recalcBoth({
         ...s,
         [who]: { ...s[who], hand },
         weatherEffects: weather,
-        lastAction: `${who === 'player' ? 'You' : 'AI'} played ${card.def.name}`,
+        lastAction: `${whoLabel} played ${card.def.name}`,
+        events: [...s.events, weatherEvent],
         currentTurn: opponent,
       });
     }
@@ -442,16 +474,16 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
       if (s[who].leaderUsed) return s;
       // Also block leader use if player has passed (shouldn't happen via UI, but guard here)
       if (s[who].hasPassed) return s;
-      let newS: GameState = { ...s, [who]: { ...s[who], leaderUsed: true }, lastAction: `${who === 'player' ? 'You' : 'AI'} used leader ability` };
+      const leaderEvents: GameEvent[] = [];
+      let newS: GameState = { ...s, [who]: { ...s[who], leaderUsed: true }, lastAction: `${whoLabel} invokes their leader ability` };
       const faction = s[who].faction;
 
       if (faction === 'hellenic') {
-        // Draw 1 card
         if (newS[who].deck.length > 0) {
           newS[who] = { ...newS[who], hand: [...newS[who].hand, newS[who].deck[0]], deck: newS[who].deck.slice(1) };
         }
+        leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the Oracle — a card is drawn from the deck.`, icon: '🔮' }));
       } else if (faction === 'vedic') {
-        // Revive strongest non-heroic from own discard
         const discards = newS[who].discard
           .filter(u => u.def.type === 'unit' && u.def.ability !== 'heroic')
           .sort((a, b) => b.def.strength - a.def.strength);
@@ -464,13 +496,13 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             discard: newS[who].discard.filter(u => u.instanceId !== toRevive.instanceId),
             battlefield: { ...newS[who].battlefield, [revRow]: addToRow(newS[who].battlefield[revRow], revived) },
           };
+          leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the Sacred Flame — ${toRevive.def.name} is reborn from ash!`, targetName: toRevive.def.name, icon: '🔥' }));
         }
       } else if (faction === 'norse') {
-        // Apply frost to opponent close row
         const weather = { ...newS.weatherEffects, close: true };
         newS = { ...newS, weatherEffects: weather };
+        leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the World Tree Seer — frost grips the Close Row!`, icon: '❄️' }));
       } else if (faction === 'slavic') {
-        // Return one friendly non-heroic to hand
         const allFriendly = [
           ...newS[who].battlefield.close.units,
           ...newS[who].battlefield.ranged.units,
@@ -482,32 +514,35 @@ export function applyAction(state: GameState, action: GameAction, who: 'player' 
             : allFriendly[0];
           const { bf: newBf } = removeUnitFromBattlefield(newS[who].battlefield, toRecall.instanceId);
           newS[who] = { ...newS[who], battlefield: newBf, hand: [...newS[who].hand, { ...toRecall, currentStrength: toRecall.def.strength, isWeatherReduced: false }] };
+          leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the Threshold Keeper — ${toRecall.def.name} retreats to hand.`, targetName: toRecall.def.name, icon: '🌪' }));
         }
       } else if (faction === 'celtic') {
-        // Mark a row for commander doubling
         const targetRow = action.targetRow || 'close';
         if (!newS[who].battlefield[targetRow].hasCommander) {
           newS[who] = { ...newS[who], battlefield: { ...newS[who].battlefield, [targetRow]: { ...newS[who].battlefield[targetRow], hasCommander: true } } };
+          leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the Bard of the Hollow Hill — the ${targetRow} row is doubled!`, icon: '🎵' }));
         }
       } else if (faction === 'egyptian') {
-        // Destroy strongest enemy non-heroic (unconditionally)
         const target = findStrongestNonHeroic(newS, opponent);
         if (target) {
           const { bf: newBf, removed } = removeUnitFromBattlefield(newS[opponent].battlefield, target.unit.instanceId);
           if (removed) {
             newS[opponent] = { ...newS[opponent], battlefield: newBf, discard: [...newS[opponent].discard, removed] };
+            leaderEvents.push(mkEvent({ type: 'leader', who, message: `${whoLabel} invoke the Weighing Hall — ${removed.def.name} is found wanting and destroyed!`, targetName: removed.def.name, icon: '⚖️' }));
           }
         }
       }
 
-      return recalcBoth({ ...newS, currentTurn: opponent });
+      return recalcBoth({ ...newS, events: [...s.events, ...leaderEvents], currentTurn: opponent });
     }
 
     case 'PASS': {
+      const passEvent = mkEvent({ type: 'pass', who, message: `${whoLabel} pass — the field holds its breath.`, icon: '🏳️' });
       const newS = {
         ...s,
         [who]: { ...s[who], hasPassed: true },
-        lastAction: `${who === 'player' ? 'You' : 'AI'} passed`,
+        lastAction: `${whoLabel} passed`,
+        events: [...s.events, passEvent],
         currentTurn: opponent,
       };
       // If both have now passed, don't change turn — checkRoundEnd will handle it
@@ -591,6 +626,17 @@ export function checkRoundEnd(state: GameState): GameState {
     roundWinner === 'player' ? 'The field bends to your myth.' :
                                'The omen turns against you.';
 
+  const roundEvents: GameEvent[] = [
+    mkEvent({
+      type: 'round',
+      who: roundWinner === 'draw' ? 'player' : roundWinner,
+      message: roundWinner === 'draw'
+        ? `Round ${state.round} ends in a draw — both advance.`
+        : `Round ${state.round} won by ${roundWinner === 'player' ? 'you' : 'the AI'}! ${roundWinner === 'player' ? 'Draw 3 cards.' : 'Draw 2 cards.'}`,
+      icon: roundWinner === 'draw' ? '🤝' : roundWinner === 'player' ? '🏆' : '💀',
+    }),
+  ];
+
   return {
     ...state,
     player: clearPlayer(state.player, roundWinner === 'player'),
@@ -601,6 +647,7 @@ export function checkRoundEnd(state: GameState): GameState {
     weatherEffects: { close: false, ranged: false, ritual: false },
     roundWinners: newRoundWinners,
     lastAction: roundMsg,
+    events: roundEvents,
   };
 }
 
@@ -722,5 +769,6 @@ export function createInitialState(playerFaction: Faction, aiFaction: Faction): 
     mulligansLeft: 2,
     selectedFaction: playerFaction,
     winner: undefined,
+    events: [],
   };
 }
