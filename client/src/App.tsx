@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Router, Switch, Route, useLocation } from 'wouter';
+import { useHashLocation } from 'wouter/use-hash-location';
 import type { GameState, GamePhase, Faction, Row, CardInstance, GameEvent } from '../../shared/schema';
 import { 
   createInitialState, 
@@ -12,6 +14,7 @@ import { CardArt } from './art/CardArt';
 import { FACTIONS } from './data/factions';
 import { ALL_CARDS } from './data/cards';
 import { audio } from './audio/AudioEngine';
+import LandingPage from './LandingPage';
 
 // ============================
 // Mobile Detection
@@ -89,10 +92,10 @@ const ROW_COLORS: Record<string, string> = {
   ritual: '#8030C0',
 };
 
-// Card dimensions — larger than before for better art visibility
+// Card dimensions — sizes tuned for full-viewport layout
 const CARD_DIMS = {
-  sm: { w: 84,  h: 126 },
-  md: { w: 104, h: 156 },
+  sm: { w: 78,  h: 117 },  // battlefield cards
+  md: { w: 96,  h: 144 },  // hand cards
   lg: { w: 130, h: 195 },
 };
 
@@ -141,12 +144,12 @@ function CardComponent({ card, size = 'md', onDragStart, onDragEnd, dragging, on
       {/* Strength badge */}
       <div style={{
         position: 'absolute', top: 4, left: 4,
-        width: 26, height: 26, borderRadius: '50%',
+        width: 28, height: 28, borderRadius: '50%',
         background: card.isWeatherReduced ? '#1A3A6E' : card.def.strength >= 8 ? 'rgba(200,50,50,0.9)' : 'rgba(8,8,16,0.9)',
         border: `2px solid ${isHeroic ? '#F0C84A' : card.isWeatherReduced ? '#4080C0' : 'rgba(200,160,64,0.6)'}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: 'Cinzel, serif', fontWeight: 900,
-        fontSize: size === 'sm' ? '0.65rem' : '0.75rem',
+        fontSize: size === 'sm' ? '0.75rem' : '0.85rem',
         color: isHeroic ? '#F0C84A' : card.isWeatherReduced ? '#80B0E8' : '#F0F0F0',
         lineHeight: 1, zIndex: 10,
       }}>
@@ -177,7 +180,7 @@ function CardComponent({ card, size = 'md', onDragStart, onDragEnd, dragging, on
       <div style={{ padding: '4px 4px 3px', flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
         <div style={{
           fontFamily: 'Cinzel, serif',
-          fontSize: size === 'sm' ? '0.52rem' : '0.6rem',
+          fontSize: size === 'sm' ? '0.62rem' : '0.72rem',
           fontWeight: 700, color: '#E8E0C8', letterSpacing: '0.02em', lineHeight: 1.2,
           overflow: 'hidden', display: '-webkit-box',
           WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
@@ -1101,9 +1104,10 @@ function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeathe
 }) {
   const color = { close: '#C03030', ranged: '#3080C0', ritual: '#8030C0' }[rowType];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: 48, flexShrink: 0 }}>
-        <div className="row-label" style={{ color }}>{label}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', flex: 1, minHeight: 0 }}>
+      {/* Label + score sidebar — compact vertical */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, width: 44, flexShrink: 0, height: '100%' }}>
+        <div className="row-label" style={{ color, fontSize: '0.68rem', letterSpacing: '0.12em' }}>{label}</div>
         <div className="score-badge" style={{ width: 32, height: 32, fontSize: '0.9rem', borderColor: hasWeather ? '#4080C0' : color, color: hasWeather ? '#80A8E8' : '#F0D080', background: `${hasWeather ? 'rgba(64,128,192,0.1)' : `${color}15`}`, position: 'relative' }}>
           {score}
           {hasWeather && <div style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, borderRadius: '50%', background: '#4080C0', border: '1px solid #6090C8', fontSize: '0.45rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>❄</div>}
@@ -1111,7 +1115,7 @@ function BattleRow({ row, label, rowType, isEnemy, isValidDrop, score, hasWeathe
       </div>
       <div
         className={`battlefield-row ${rowType}-row ${isValidDrop ? 'valid-drop' : ''} ${weatherClass || ''}`}
-        style={{ flex: 1, background: isEnemy ? 'rgba(255,60,60,0.03)' : 'rgba(60,60,255,0.03)', minHeight: 100, overflowX: 'auto', position: 'relative' }}
+        style={{ flex: 1, background: isEnemy ? 'rgba(255,60,60,0.03)' : 'rgba(60,60,255,0.03)', minHeight: 0, overflowX: 'auto', position: 'relative' }}
         onPointerEnter={onPointerEnter}
         onPointerLeave={onPointerLeave}
       >
@@ -1474,130 +1478,185 @@ function BattleScreen({ state, onAction, onSave }: { state: GameState; onAction:
     );
   }
 
-  // ─── DESKTOP LAYOUT ───────────────────────────────────────────────────────
+  // ─── DESKTOP LAYOUT ─────────────────────────────────────────────────────
+  // Layout: header 44px + battlefield+sidebar fills remaining + no scroll
   return (
     <div ref={containerRef} style={{ width: '100vw', height: '100vh', background: `radial-gradient(ellipse at 50% 100%, ${bg}88 0%, #080810 70%)`, display: 'flex', flexDirection: 'column', overflow: 'hidden', userSelect: 'none' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', borderBottom: '1px solid #1A1A2E', background: 'rgba(8,8,16,0.8)', flexShrink: 0 }}>
+
+      {/* ── HEADER ── 44px fixed */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', height: 44, borderBottom: '1px solid #1A1A2E', background: 'rgba(8,8,16,0.9)', flexShrink: 0 }}>
+
         {/* AI info */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 180 }}>
-          <div style={{ textAlign: 'right' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 220 }}>
+          <div className="score-badge" style={{ width: 38, height: 38, fontSize: '1.1rem', background: aiScore > playerScore ? 'rgba(200,50,50,0.2)' : 'rgba(8,8,16,0.8)', borderColor: aiScore > playerScore ? '#C03030' : '#404058' }}>{aiScore}</div>
+          <div style={{ display: 'flex', gap: 5 }}>
+            {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'ai' ? 'won' : w === 'player' ? 'lost' : 'draw'}`} />))}
+            {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'ai').length) }).map((_, i) => (<div key={`ea${i}`} className="round-gem" />))}
+          </div>
+          <div>
             <div
               ref={aiFactionRef as React.RefObject<HTMLDivElement>}
               className="font-heading"
               onMouseEnter={() => setShowAiTooltip(true)}
               onMouseLeave={() => setShowAiTooltip(false)}
-              style={{ fontSize: '0.7rem', color: '#C03030', letterSpacing: '0.1em', cursor: 'help', userSelect: 'none' }}
+              style={{ fontSize: '0.85rem', color: '#C03030', letterSpacing: '0.08em', cursor: 'help', userSelect: 'none', lineHeight: 1.1 }}
             >{aiFaction?.name}</div>
-            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#604040', letterSpacing: '0.05em' }}>Hand: {state.ai.hand.length} · Deck: {state.ai.deck.length}</div>
+            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.65rem', color: '#604040', letterSpacing: '0.04em' }}>Hand {state.ai.hand.length} · Deck {state.ai.deck.length}</div>
           </div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'ai' ? 'won' : w === 'player' ? 'lost' : 'draw'}`} />))}
-            {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'ai').length) }).map((_, i) => (<div key={`ea${i}`} className="round-gem" />))}
-          </div>
-          <div className="score-badge" style={{ background: aiScore > playerScore ? 'rgba(200,50,50,0.15)' : 'rgba(8,8,16,0.8)', borderColor: aiScore > playerScore ? '#C03030' : '#404058', fontSize: '1rem' }}>{aiScore}</div>
         </div>
 
-        {/* Center */}
-        <div style={{ textAlign: 'center' }}>
-          <div className="font-heading" style={{ fontSize: '0.6rem', color: '#604020', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Round {state.round} / 3</div>
-          <div className="font-body" style={{ fontSize: '0.6rem', color: '#4A4A6A', fontStyle: 'italic', maxWidth: 200, textAlign: 'center' }}>{state.lastAction || ''}</div>
-          <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: 2 }}>
+        {/* Center — round + weather + save */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.75rem', color: '#604020', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Round {state.round}/3</div>
+          <div style={{ display: 'flex', gap: 4 }}>
             {state.weatherEffects.close && <div className="weather-indicator" style={{ borderColor: '#C03030', color: '#C06060', background: 'rgba(192,48,48,0.1)' }}>Close ❄</div>}
             {state.weatherEffects.ranged && <div className="weather-indicator" style={{ borderColor: '#3080C0', color: '#6090C0', background: 'rgba(48,128,192,0.1)' }}>Ranged ❄</div>}
             {state.weatherEffects.ritual && <div className="weather-indicator" style={{ borderColor: '#8030C0', color: '#9060C0', background: 'rgba(128,48,192,0.1)' }}>Ritual ❄</div>}
           </div>
-          {/* Save button */}
           <button onClick={() => { audio.playSfx('button_click'); onSave(); }} style={{
-            marginTop: 4, fontFamily: 'Cinzel, serif', fontSize: '0.52rem', letterSpacing: '0.1em',
-            padding: '2px 8px', border: '1px solid #2A2A3E', borderRadius: 3,
-            background: 'transparent', color: '#404060', cursor: 'pointer',
-            transition: 'all 0.2s',
+            fontFamily: 'Cinzel, serif', fontSize: '0.62rem', letterSpacing: '0.1em',
+            padding: '3px 10px', border: '1px solid #2A2A3E', borderRadius: 3,
+            background: 'transparent', color: '#404060', cursor: 'pointer', transition: 'all 0.2s',
           }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#C8A040'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#C8A04060'; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#404060'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#2A2A3E'; }}
-          >
-            💾 Save & Exit
-          </button>
+          onMouseEnter={e => { (e.target as HTMLElement).style.color = '#C8A040'; (e.target as HTMLElement).style.borderColor = '#C8A04060'; }}
+          onMouseLeave={e => { (e.target as HTMLElement).style.color = '#404060'; (e.target as HTMLElement).style.borderColor = '#2A2A3E'; }}
+          >💾 Save & Exit</button>
         </div>
 
         {/* Player info */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 180, justifyContent: 'flex-end' }}>
-          <div className="score-badge" style={{ background: playerScore >= aiScore ? 'rgba(200,160,64,0.15)' : 'rgba(8,8,16,0.8)', borderColor: playerScore >= aiScore ? '#C8A040' : '#404058', fontSize: '1rem' }}>{playerScore}</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'player' ? 'won' : w === 'ai' ? 'lost' : 'draw'}`} />))}
-            {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'player').length) }).map((_, i) => (<div key={`ep${i}`} className="round-gem" />))}
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 220, justifyContent: 'flex-end' }}>
           <div>
             <div
               ref={playerFactionRef as React.RefObject<HTMLDivElement>}
               className="font-heading"
               onMouseEnter={() => setShowPlayerTooltip(true)}
               onMouseLeave={() => setShowPlayerTooltip(false)}
-              style={{ fontSize: '0.7rem', color: '#C8A040', letterSpacing: '0.1em', cursor: 'help', userSelect: 'none' }}
+              style={{ fontSize: '0.85rem', color: '#C8A040', letterSpacing: '0.08em', cursor: 'help', userSelect: 'none', lineHeight: 1.1, textAlign: 'right' }}
             >{playerFaction?.name}</div>
-            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.55rem', color: '#604020', letterSpacing: '0.05em' }}>Hand: {state.player.hand.length} · Deck: {state.player.deck.length}</div>
+            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.65rem', color: '#604020', letterSpacing: '0.04em', textAlign: 'right' }}>Hand {state.player.hand.length} · Deck {state.player.deck.length}</div>
           </div>
+          <div style={{ display: 'flex', gap: 5 }}>
+            {state.roundWinners.map((w, i) => (<div key={i} className={`round-gem ${w === 'player' ? 'won' : w === 'ai' ? 'lost' : 'draw'}`} />))}
+            {Array.from({ length: Math.max(0, 2 - state.roundWinners.filter(w => w === 'player').length) }).map((_, i) => (<div key={`ep${i}`} className="round-gem" />))}
+          </div>
+          <div className="score-badge" style={{ width: 38, height: 38, fontSize: '1.1rem', background: playerScore >= aiScore ? 'rgba(200,160,64,0.15)' : 'rgba(8,8,16,0.8)', borderColor: playerScore >= aiScore ? '#C8A040' : '#404058' }}>{playerScore}</div>
         </div>
       </div>
 
-      {/* Battlefield */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '4px 8px', gap: 0, overflow: 'hidden', minHeight: 0 }}>
-        {/* AI side */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minHeight: 0, paddingBottom: 4, overflowY: 'auto' }}>
-          <BattleRow row={state.ai.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy hasWeather={state.weatherEffects.ritual} weatherClass={getWeatherClass(state.weatherEffects.ritual, 'ritual')} isValidDrop={false} score={getRowScore(state.ai.battlefield.ritual)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-          <BattleRow row={state.ai.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy hasWeather={state.weatherEffects.ranged} weatherClass={getWeatherClass(state.weatherEffects.ranged, 'ranged')} isValidDrop={false} score={getRowScore(state.ai.battlefield.ranged)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-          <BattleRow row={state.ai.battlefield.close} label="Close" rowType="close" isEnemy hasWeather={state.weatherEffects.close} weatherClass={getWeatherClass(state.weatherEffects.close, 'close')} isValidDrop={false} score={getRowScore(state.ai.battlefield.close)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-        </div>
+      {/* ── MAIN AREA: battlefield (left, flex-1) + hand sidebar (right, fixed width) ── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* Center divider — clearly separates the two sides */}
-        <div style={{ flexShrink: 0, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #C8A04030)' }} />
-          <div style={{ height: 6, width: '60%', background: 'linear-gradient(90deg, transparent, #C8A04070, #C8A040CC, #C8A04070, transparent)', borderRadius: 3, boxShadow: '0 0 12px rgba(200,160,64,0.35), 0 0 4px rgba(200,160,64,0.6)' }} />
-          <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, #C8A04030, transparent)' }} />
-        </div>
+        {/* ── BATTLEFIELD ── */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '3px 6px 3px 8px', overflow: 'hidden', minHeight: 0 }}>
 
-        {/* Player side */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minHeight: 0, paddingTop: 4, overflowY: 'auto' }}>
-          <BattleRow row={state.player.battlefield.close} label="Close" rowType="close" isEnemy={false} hasWeather={state.weatherEffects.close} weatherClass={getWeatherClass(state.weatherEffects.close, 'close')} isValidDrop={isValidRow('close') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.close)} onPointerEnter={() => setHoveredRow('close')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-          <BattleRow row={state.player.battlefield.ranged} label="Ranged" rowType="ranged" isEnemy={false} hasWeather={state.weatherEffects.ranged} weatherClass={getWeatherClass(state.weatherEffects.ranged, 'ranged')} isValidDrop={isValidRow('ranged') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ranged)} onPointerEnter={() => setHoveredRow('ranged')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-          <BattleRow row={state.player.battlefield.ritual} label="Ritual" rowType="ritual" isEnemy={false} hasWeather={state.weatherEffects.ritual} weatherClass={getWeatherClass(state.weatherEffects.ritual, 'ritual')} isValidDrop={isValidRow('ritual') || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))} score={getRowScore(state.player.battlefield.ritual)} onPointerEnter={() => setHoveredRow('ritual')} onPointerLeave={() => setHoveredRow(null)} onCardClick={setZoomedCard} destroyedIds={destroyedIds} />
-        </div>
-      </div>
-
-      {/* Hand + controls */}
-      <div style={{ borderTop: '1px solid #1A1A2E', background: 'rgba(8,8,16,0.9)', padding: '4px 12px 6px', flexShrink: 0, display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
-          <button className="pass-button" onClick={handlePass} disabled={state.currentTurn !== 'player' || state.player.hasPassed} style={{ opacity: (state.currentTurn !== 'player' || state.player.hasPassed) ? 0.4 : 1, cursor: (state.currentTurn !== 'player' || state.player.hasPassed) ? 'not-allowed' : 'pointer' }}>
-            {state.player.hasPassed ? 'Passed' : 'Pass'}
-          </button>
-          {!state.player.leaderUsed && (
-            <button onClick={handleLeader} disabled={state.currentTurn !== 'player'} style={{ fontFamily: 'Cinzel, serif', fontWeight: 600, fontSize: '0.6rem', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '5px 10px', border: `1px solid ${playerFaction?.colors.accent || '#C8A040'}`, borderRadius: 4, background: `${playerFaction?.colors.accent || '#C8A040'}18`, color: playerFaction?.colors.accent || '#C8A040', cursor: state.currentTurn !== 'player' ? 'not-allowed' : 'pointer', opacity: state.currentTurn !== 'player' ? 0.4 : 1 }}>
-              Leader
-            </button>
-          )}
-          {aiThinking && <div className="ai-thinking"><span>●</span><span>●</span><span>●</span></div>}
-        </div>
-
-        <div className="hand-area" style={{ flex: 1 }}>
-          {state.player.hand.map(card => (
-            <div key={card.instanceId}
-              onMouseEnter={e => handleCardHover(e, card)}
-              onMouseLeave={() => setHoveredCard(null)}
-              onContextMenu={e => { e.preventDefault(); setZoomedCard(card); }}
-              style={{ position: 'relative', zIndex: drag.card?.instanceId === card.instanceId ? 1000 : undefined }}
-            >
-              <CardComponent
-                card={card} size="md"
-                onDragStart={handleCardDragStart}
-                dragging={drag.card?.instanceId === card.instanceId && drag.active}
-                style={{ opacity: state.currentTurn !== 'player' ? 0.5 : 1, visibility: (drag.card?.instanceId === card.instanceId && drag.active) ? 'hidden' : 'visible' }}
-              />
-            </div>
+          {/* AI rows — ritual, ranged, close (top to bottom = far to near) */}
+          {(['ritual','ranged','close'] as Row[]).map(row => (
+            <BattleRow
+              key={`ai-${row}`}
+              row={(state.ai.battlefield as any)[row]}
+              label={row.charAt(0).toUpperCase() + row.slice(1)}
+              rowType={row}
+              isEnemy
+              hasWeather={(state.weatherEffects as any)[row]}
+              weatherClass={getWeatherClass((state.weatherEffects as any)[row], row)}
+              isValidDrop={false}
+              score={getRowScore((state.ai.battlefield as any)[row])}
+              onCardClick={setZoomedCard}
+              destroyedIds={destroyedIds}
+            />
           ))}
-          {state.player.hand.length === 0 && (
-            <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.7rem', color: '#2A2A3A', letterSpacing: '0.1em', margin: 'auto' }}>No cards in hand</div>
-          )}
+
+          {/* Gold divider */}
+          <div style={{ flexShrink: 0, height: 12, display: 'flex', alignItems: 'center', padding: '0 4px' }}>
+            <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #C8A04030)' }} />
+            <div style={{ height: 5, width: '55%', background: 'linear-gradient(90deg, transparent, #C8A04070, #C8A040CC, #C8A04070, transparent)', borderRadius: 3, boxShadow: '0 0 10px rgba(200,160,64,0.4)' }} />
+            <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, #C8A04030, transparent)' }} />
+          </div>
+
+          {/* Player rows — close, ranged, ritual (top to bottom = near to far) */}
+          {(['close','ranged','ritual'] as Row[]).map(row => (
+            <BattleRow
+              key={`pl-${row}`}
+              row={(state.player.battlefield as any)[row]}
+              label={row.charAt(0).toUpperCase() + row.slice(1)}
+              rowType={row}
+              isEnemy={false}
+              hasWeather={(state.weatherEffects as any)[row]}
+              weatherClass={getWeatherClass((state.weatherEffects as any)[row], row)}
+              isValidDrop={isValidRow(row) || (drag.active && (drag.card?.def.type === 'weather' || drag.card?.def.type === 'special'))}
+              score={getRowScore((state.player.battlefield as any)[row])}
+              onPointerEnter={() => setHoveredRow(row)}
+              onPointerLeave={() => setHoveredRow(null)}
+              onCardClick={setZoomedCard}
+              destroyedIds={destroyedIds}
+            />
+          ))}
+        </div>
+
+        {/* ── RIGHT SIDEBAR: Hand + action buttons ── */}
+        <div style={{
+          width: 'clamp(260px, 28vw, 360px)',
+          display: 'flex', flexDirection: 'column',
+          borderLeft: '1px solid #1A1A2E',
+          background: 'rgba(8,8,16,0.75)',
+          overflow: 'hidden', flexShrink: 0,
+        }}>
+          {/* Status + thinking */}
+          <div style={{ padding: '5px 12px', borderBottom: '1px solid #1A1A2E', display: 'flex', alignItems: 'center', gap: 6, minHeight: 32 }}>
+            <div className="font-body" style={{ fontSize: '0.7rem', color: '#4A4A6A', fontStyle: 'italic', flex: 1, lineHeight: 1.3 }}>{state.lastAction || (state.currentTurn === 'player' ? 'Your turn — play a card' : 'AI is thinking…')}</div>
+            {aiThinking && <div className="ai-thinking"><span>●</span><span>●</span><span>●</span></div>}
+          </div>
+
+          {/* Pass + Leader */}
+          <div style={{ padding: '7px 12px', display: 'flex', gap: 8, borderBottom: '1px solid #1A1A2E', flexShrink: 0 }}>
+            <button className="pass-button" onClick={handlePass}
+              disabled={state.currentTurn !== 'player' || state.player.hasPassed}
+              style={{ flex: 1, opacity: (state.currentTurn !== 'player' || state.player.hasPassed) ? 0.4 : 1, cursor: (state.currentTurn !== 'player' || state.player.hasPassed) ? 'not-allowed' : 'pointer', fontSize: '0.78rem' }}>
+              {state.player.hasPassed ? 'Passed' : 'Pass'}
+            </button>
+            {!state.player.leaderUsed && (
+              <button onClick={handleLeader}
+                disabled={state.currentTurn !== 'player'}
+                style={{ flex: 1, fontFamily: 'Cinzel, serif', fontWeight: 600, fontSize: '0.78rem', letterSpacing: '0.06em', textTransform: 'uppercase', padding: '6px 10px', border: `1px solid ${playerFaction?.colors.accent || '#C8A040'}`, borderRadius: 4, background: `${playerFaction?.colors.accent || '#C8A040'}18`, color: playerFaction?.colors.accent || '#C8A040', cursor: state.currentTurn !== 'player' ? 'not-allowed' : 'pointer', opacity: state.currentTurn !== 'player' ? 0.4 : 1 }}>
+                Leader
+              </button>
+            )}
+          </div>
+
+          {/* Hand label */}
+          <div style={{ padding: '5px 12px 2px', fontFamily: 'Cinzel, serif', fontSize: '0.65rem', color: '#404058', letterSpacing: '0.15em', textTransform: 'uppercase', flexShrink: 0 }}>
+            Your Hand ({state.player.hand.length})
+          </div>
+
+          {/* Hand scrollable grid */}
+          <div style={{
+            flex: 1,
+            padding: '4px 8px 8px',
+            overflowY: 'auto',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 5,
+            alignContent: 'flex-start',
+          }}>
+            {state.player.hand.map(card => (
+              <div key={card.instanceId}
+                onMouseEnter={e => handleCardHover(e, card)}
+                onMouseLeave={() => setHoveredCard(null)}
+                onContextMenu={e => { e.preventDefault(); setZoomedCard(card); }}
+                style={{ position: 'relative', zIndex: drag.card?.instanceId === card.instanceId ? 1000 : undefined }}
+              >
+                <CardComponent
+                  card={card} size="md"
+                  onDragStart={handleCardDragStart}
+                  dragging={drag.card?.instanceId === card.instanceId && drag.active}
+                  style={{ opacity: state.currentTurn !== 'player' ? 0.5 : 1, visibility: (drag.card?.instanceId === card.instanceId && drag.active) ? 'hidden' : 'visible' }}
+                />
+              </div>
+            ))}
+            {state.player.hand.length === 0 && (
+              <div style={{ fontFamily: 'Cinzel, serif', fontSize: '0.72rem', color: '#2A2A3A', letterSpacing: '0.1em', padding: '20px 0' }}>No cards in hand</div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1731,15 +1790,27 @@ function GalleryScreen({ onBack }: { onBack: () => void }) {
 // ============================
 // Main App
 // ============================
-export default function App() {
-  const [phase, setPhase] = useState<GamePhase | 'transition'>('title');
+// ============================
+// Game App (the actual game — at #/play)
+// ============================
+function GameApp() {
+  const [, navigate] = useLocation();
+  const [phase, setPhase] = useState<GamePhase | 'transition'>('faction-select');
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedFaction, setSelectedFaction] = useState<Faction | null>(null);
   const [hasSave, setHasSave] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
 
-  // Check for saved game
-  useEffect(() => { setHasSave(!!loadSavedGame()); }, []);
+  // Check for saved game — offer to load if present
+  useEffect(() => {
+    const saved = loadSavedGame();
+    if (saved) {
+      setHasSave(true);
+      setGameState(saved);
+      setSelectedFaction(saved.player.faction);
+      setPhase('battle');
+    }
+  }, []);
 
   // Start audio on first interaction
   useEffect(() => {
@@ -1747,8 +1818,6 @@ export default function App() {
       await audio.resume();
       await audio.playMusic('title');
       await audio.preload();
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
     };
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -1757,7 +1826,7 @@ export default function App() {
   // Switch music based on phase
   useEffect(() => {
     if (phase === 'battle') audio.playMusic('battle');
-    else if (phase === 'title' || phase === 'faction-select' || phase === 'mulligan' || phase === 'gallery' || phase === 'game-over') audio.playMusic('title');
+    else audio.playMusic('title');
   }, [phase]);
 
   // Play fanfare on game over
@@ -1782,20 +1851,15 @@ export default function App() {
   const handleAction = useCallback((action: any, who: 'player' | 'ai') => {
     setGameState(prev => {
       if (!prev) return prev;
-      // Ignore AI actions if AI already passed
       if (who === 'ai' && prev.ai.hasPassed && action.type !== 'END_MULLIGAN') return prev;
-      // Ignore AI actions when it's not the AI's turn AND player hasn't passed yet
-      // (if player has passed, AI is allowed to act even when currentTurn === 'player')
       if (who === 'ai' && prev.currentTurn !== 'ai' && !prev.player.hasPassed) return prev;
       let next = applyAction(prev, action, who);
-      // Auto-pass any player whose hand is empty and hasn't passed yet
       if (!next.player.hasPassed && next.player.hand.length === 0 && next.phase === 'battle') {
         next = applyAction(next, { type: 'PASS' }, 'player');
       }
       if (!next.ai.hasPassed && next.ai.hand.length === 0 && next.phase === 'battle') {
         next = applyAction(next, { type: 'PASS' }, 'ai');
       }
-      // Trigger round end when both have passed
       if (next.player.hasPassed && next.ai.hasPassed) {
         next = checkRoundEnd(next);
       }
@@ -1824,16 +1888,7 @@ export default function App() {
       setHasSave(true);
       setSaveNotice('Game saved!');
       setTimeout(() => setSaveNotice(''), 2200);
-      setPhase('title');
-    }
-  };
-
-  const handleLoadSave = () => {
-    const saved = loadSavedGame();
-    if (saved) {
-      setGameState(saved);
-      setSelectedFaction(saved.player.faction);
-      setPhase('battle');
+      navigate('/');
     }
   };
 
@@ -1844,31 +1899,42 @@ export default function App() {
   }, [gameState?.phase]);
 
   return (
-    <>
-      <div className="game-container" style={{ width: '100vw', height: '100vh', background: '#080810' }}>
-        {phase === 'title' && (
-          <TitleScreen onPlay={() => setPhase('faction-select')} onGallery={() => setPhase('gallery')} hasSave={hasSave} onLoadSave={handleLoadSave} />
-        )}
-        {phase === 'faction-select' && <FactionSelectScreen onSelect={handleSelectFaction} />}
-        {phase === 'transition' && <CinematicTransition onDone={() => setPhase('mulligan')} />}
-        {phase === 'mulligan' && gameState && <MulliganScreen state={gameState} onMulligan={handleMulligan} onReady={handleEndMulligan} />}
-        {phase === 'battle' && gameState && <BattleScreen state={gameState} onAction={handleAction} onSave={handleSave} />}
-        {phase === 'game-over' && gameState && <GameOverScreen state={gameState} onRematch={handleRematch} onChangeFaction={handleChangeFaction} />}
-        {phase === 'gallery' && <GalleryScreen onBack={() => setPhase('title')} />}
+    <div className="game-container" style={{ width: '100vw', height: '100vh', background: '#080810' }}>
+      {phase === 'faction-select' && <FactionSelectScreen onSelect={handleSelectFaction} />}
+      {phase === 'transition' && <CinematicTransition onDone={() => setPhase('mulligan')} />}
+      {phase === 'mulligan' && gameState && <MulliganScreen state={gameState} onMulligan={handleMulligan} onReady={handleEndMulligan} />}
+      {phase === 'battle' && gameState && <BattleScreen state={gameState} onAction={handleAction} onSave={handleSave} />}
+      {phase === 'game-over' && gameState && <GameOverScreen state={gameState} onRematch={handleRematch} onChangeFaction={handleChangeFaction} />}
+      {phase === 'gallery' && <GalleryScreen onBack={handleChangeFaction} />}
 
-        {/* Save notice toast */}
-        {saveNotice && (
-          <div style={{
-            position: 'fixed', bottom: 60, right: 16, zIndex: 9999,
-            padding: '8px 16px', borderRadius: 6,
-            background: 'rgba(14,20,14,0.95)', border: '1px solid #406040',
-            fontFamily: 'Cinzel, serif', fontSize: '0.7rem', color: '#80C080',
-            animation: 'fadeIn 0.2s ease',
-          }}>
-            {saveNotice}
-          </div>
-        )}
-      </div>
-    </>
+      {saveNotice && (
+        <div style={{
+          position: 'fixed', bottom: 60, right: 16, zIndex: 9999,
+          padding: '8px 16px', borderRadius: 6,
+          background: 'rgba(14,20,14,0.95)', border: '1px solid #406040',
+          fontFamily: 'Cinzel, serif', fontSize: '0.7rem', color: '#80C080',
+          animation: 'fadeIn 0.2s ease',
+        }}>
+          {saveNotice}
+        </div>
+      )}
+      <MuteButton />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Router hook={useHashLocation}>
+      <Switch>
+        <Route path="/" component={() => (
+          <LandingPage onPlay={() => { window.location.hash = '#/play'; }} />
+        )} />
+        <Route path="/play" component={GameApp} />
+        <Route component={() => (
+          <LandingPage onPlay={() => { window.location.hash = '#/play'; }} />
+        )} />
+      </Switch>
+    </Router>
   );
 }
